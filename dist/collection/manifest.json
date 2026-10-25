@@ -1,0 +1,9 @@
+{
+  "name": "Hyperfy Billard",
+  "apps": [
+    "PoolTable.hyp",
+    "CueRack.hyp",
+    "PoolLight.hyp",
+    "WallLightSwitch.hyp"
+  ]
+}

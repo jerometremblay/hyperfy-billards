@@ -1,0 +1,35 @@
+{
+  "name": "hyperfy-billards",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "build": "node upstream-table/build.mjs && node build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "preview": "node preview.mjs",
+    "validate": "node validate.mjs",
+    "preview:overlay": "node preview.mjs --overlay",
+    "build:table": "node upstream-table/build.mjs",
+    "pretest": "npm run build",
+    "test:integration": "node --test test/integration/*.test.mjs",
+    "build:collection": "node build-collection.mjs"
+  },
+  "dependencies": {
+    "dotenv-flow": "4.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "fflate": "0.8.3",
+    "three": "0.186.1",
+    "ses": "2.3.0",
+    "lodash-es": "4.18.1",
+    "nanoid": "6.0.2",
+    "three-mesh-bvh": "0.9.16",
+    "yoga-layout": "3.2.1"
+  },
+  "engines": {
+    "npm": ">=10.0.0",
+    "node": "^22.23.4 || ^24.22.1 || >=26.12.1"
+  }
+}
