@@ -69,9 +69,9 @@ another port; stop the existing preview before switching ports because the
 isolated database is shared. Ctrl-C stops it.
 
 `npm test` exercises the packaged script, physics, cues, sounds, and vendored
-native Hyperfy nodes and all four pool-room objects without an engine checkout. To also test the engine's default
-pool collection and fireplace pickup hints, rebuild that collection from the engine
-checkout with `node scripts/create-pool-collection.mjs`, then run:
+native Hyperfy nodes and all four pool-room objects without an engine checkout.
+Optional integration checks verify the engine's wall light switch with the bundled
+pendant fixture, plus fireplace pickup hints:
 
 ```sh
 HYPERFY_ROOT=/path/to/hyperfy npm run test:integration
