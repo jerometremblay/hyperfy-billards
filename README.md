@@ -1,11 +1,14 @@
 # Hyperfy Billards
 
-A portable, server-owned pool practice app for this Hyperfy 0.16 fork. One `.hyp`
-contains the physics code, renderer adapter, spatial sound samples, numbered ball textures and empty GLB
-bootstrap. The physics needs no external service or runtime downloads. The close,
-animated camera return uses this fork's native player camera API.
-Playing requires a held cue from the companion rack (`cue-rack/rack.hyp`). The
-installed world uses its existing four-cue rack, with the same pickup/return flow.
+![Pool table and pendant light in Hyperfy](pool-table.png)
+
+A standalone, server-owned pool practice app for
+[jerometremblay/hyperfy](https://github.com/jerometremblay/hyperfy) (Hyperfy 0.16).
+The included `.hyp` packages contain their models, physics code, spatial sound
+samples and numbered ball textures. The physics needs no external service or
+runtime downloads. The close, animated camera return uses the engine's native
+player camera API. Playing requires a held cue from the companion four-cue rack
+(`dist/collection/CueRack.hyp`).
 Stationary tables and empty cue racks register no frame updates. Server physics
 runs while balls move; client updates stop after input, interpolation and sounds
 finish. Snapshots and interaction events wake them again, and ownership leases
@@ -35,8 +38,7 @@ The existing worldsync compiler and package helpers are vendored with their
 source and license. npm dependencies are declared in `package.json` and pinned
 in `package-lock.json`. Build, tests and validation require only this repository,
 Node/npm and Python 3 for validation. Gameplay requires a compatible Hyperfy
-server; preview and existing world deployments use the configured engine/world
-checkouts described below.
+server; local preview uses the engine checkout described below.
 
 ## Run
 
@@ -132,45 +134,28 @@ not the furniture's exterior size. Balls have 57.15 mm diameter and 170 g mass.
 
 Turn **Show practice surface** off to retain only the simulated balls and controls.
 For another artist's table, hide its static balls and align the overlay before
-combining them. The installed house table now uses the original Tailuge model,
+combining them. The bundled pool table uses the original Tailuge model,
 as described below.
 
-### Installed house overlay
+### Original table model
 
-The game and original Tailuge table are deployed in the online 3333 world.
-`overlay/fit.json` records its exact placement and regulation 8-foot dimensions.
-The table's position and orientation are preserved.
-The previous custom artwork was replaced with upstream `dist/models/p8.min.gltf`
-from the same pinned revision as the physics. It is converted to a self-contained
-Y-up GLB, with its end sections translated to fit the 8-foot surface while retaining
-the original pocket sizes. The cloth is at local Y=0.708 m. The upstream asset is
-a tabletop; four plain support legs are added to ground it. Entity scale is `[1,1,1]`.
+`dist/collection/PoolTable.hyp` includes the original Tailuge table model and
+fitted game. The model comes from upstream `dist/models/p8.min.gltf` at the same
+pinned revision as the physics. It is converted to a self-contained Y-up GLB,
+with its end sections translated to fit the regulation 8-foot surface while
+retaining the original pocket sizes. The cloth is at local Y=0.708 m. The
+upstream asset is a tabletop; four plain support legs are added to ground it.
+Use entity scale `[1,1,1]`.
+
 The built-in left-mouse **Play** hint appears over the playing surface and balls
 only, while holding a rack cue and while the balls are stopped. The rails and
-supports do not start a game; clicks during a shot are ignored.
-
-Run `npm run build` to rebuild the table and combined preview. `npm run preview:overlay` uses the original model and
-fitted game in the isolated local world. `upstream-table/deploy.mjs` defaults to
-a read-only plan; `--apply` uses the configured Agent API and existing worldsync
-mapping. The old `overlay/deploy.mjs` entry point delegates to it. Deployment IDs
-remain under `overlay/`; model provenance, backups, exact-asset preview, screenshots
-and current verification are under `upstream-table/`. The world-source repository
-also contains the replacement GLB and interaction script. The game app is separate.
-
-Hover over the playing surface or a ball and click to play. Escape leaves.
+supports do not start a game; clicks during a shot are ignored. Escape leaves.
 As with any in-world camera, other avatars can walk in front of the view.
 
-`cue-rack/deploy.mjs` defaults to a read-only plan; `--apply` updates only the
-existing rack and game scripts through the supported Agent API and verifies their
-exact script bytes. The rack source is also maintained in the world-source repo.
-`cue-rack/live.json` and its screenshots record the current aiming-flow acceptance.
-
-Deployment scripts use the included worldsync tools and read credentials from
-the configured engine's `.env.agent`.
-Set `HYPERFY_ROOT` for the engine and `WORLD_SOURCE_ROOT` for the world-source
-checkout; defaults are the sibling `../hyperfy` and `../hyperfy-world-jerome`.
-Credentials and world data remain outside Git and the source archive. Deployment
-still defaults to a read-only plan and requires `--apply` to write.
+Run `npm run build` to rebuild the table and combined preview.
+`npm run preview:overlay` uses the original model and fitted game in the isolated
+local world. Editable model sources and provenance are in `upstream-table/`;
+`overlay/fit.json` records the game alignment and regulation 8-foot dimensions.
 
 ## Physics choice and limits
 
@@ -211,13 +196,7 @@ Timing is frame based, not sample accurate.
 
 All connected clients receive the normal Hyperfy app
 broadcast; ball rendering stops beyond 15 m. Interest-managed network delivery
-would need a later engine feature. The current desktop camera/controls are tested;
-mobile/XR input is not provided.
-
-The alternative [3d-pool-physics-simulation](https://github.com/iamyoussef2005/3d-pool-physics-simulation)
-was inspected, but no license file was present. Tailuge already offered a reusable,
-licensed billiards model. This implementation does not replace its equations with
-a new generic rigid-body engine.
+would need a later engine feature.
 
 Dimensions source: [WPA Recommended Equipment Specifications](https://www.wpapool.com/wp-content/uploads/2024/01/RECOMMENDED-EQUIPMENT-SPECIFICATIONS.pdf),
 sections 5 and 16. The 8-foot specification here is the WPA 92 × 46 inch surface,
@@ -235,10 +214,3 @@ when distributing the `.hyp`; provide the accompanying source archive too.
 The close shot handoff requires this fork's local `player.setCamera({target, zoom})` API. Reload clients after updating the engine build.
 
 Play is hidden while aiming. Each new aiming session resets top and side spin to zero.
-
-## Repository extraction
-
-Extracted from `hyperfy-billard/` in the Hyperfy working tree on 2026-10-24.
-The original history remains in that repository. This standalone repository
-preserves the application, source assets, notices and validation records. `vendor/hyperfy/provenance.json` identifies the native engine
-source snapshot used by standalone tests, including working-tree modifications.
