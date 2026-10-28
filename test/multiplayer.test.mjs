@@ -59,13 +59,15 @@ test('late join, two real-node clients, interpolation, input release, snapshots 
   const aimingControl = alice.control
   aimingControl.space.onPress()
   assert.equal(aimingControl.camera.write, false)
-  assert.equal(alice.activeControl, null)
+  assert.equal(alice.activeControl.camera.write, true, 'only the shot camera remains captured')
+  assert.notEqual(alice.activeControl.keyW.capture, true)
   assert.equal(server.app.state.pool.owner, null)
   for (let i = 0; i < 900; i++) {
     server.emit('update', 1 / 60)
     alice.emit('update', 1 / 60)
     bob.emit('update', 1 / 60)
   }
+  assert.equal(alice.activeControl, null)
   assert.equal(server.app.state.pool.error, null)
   assert.equal(server.app.state.pool.moving, false)
   assert.equal(server.handlers.update?.length || 0, 0)

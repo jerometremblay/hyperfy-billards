@@ -30,6 +30,7 @@ test('scratch uses the real white ball and normal orbit, without changing its pl
   const { client, control, white, players } = setup()
   const position = white.position.clone(), camera = control.camera.position.clone()
   const avatar = players[0].position.clone()
+  const rendered = new THREE.Vector3().fromArray(players[0].pose.root.position)
   assert.equal(white.active, true)
   assert.equal(white.position.y, physics.BALL_RADIUS)
   assert.equal(client.created.find(n => n.name === 'prim' && n.opacity === 0.4).active, false)
@@ -39,7 +40,8 @@ test('scratch uses the real white ball and normal orbit, without changing its pl
   control.pointer.delta.set(0, 0, 0)
   assert.ok(white.position.equals(position))
   assert.ok(control.camera.position.distanceTo(camera) > 0.1)
-  assert.ok(players[0].position.distanceTo(avatar) > 0.1)
+  assert.ok(players[0].position.equals(avatar), 'local preview must not move the authoritative player')
+  assert.ok(new THREE.Vector3().fromArray(players[0].pose.root.position).distanceTo(rendered) > 0.1)
   aimedAt(client, control, white)
   control.arrowLeft.down = true
   client.emit('update', 0.1)

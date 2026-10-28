@@ -3,10 +3,10 @@ import { BALL_RADIUS as R } from './simulation.js'
 
 // All poses are table-local (+Y up, physics +Y maps to -Z).
 export const AIM_ELEVATION = Math.atan2(0.14, 0.68)
-export function avatarStance(position, angle, size, floorY, pullback = 0) {
+export function avatarStance(position, angle, size, floorY, cueOffset = 0.28) {
   const forward = new Vector3(Math.cos(angle), 0, -Math.sin(angle))
   const across = new Vector3(Math.sin(angle), 0, Math.cos(angle))
-  const origin = new Vector3(position[0], floorY, -position[1]).addScaledVector(across, -0.32)
+  const origin = new Vector3(position[0], floorY, -position[1]).addScaledVector(across, -cueOffset)
   const backward = forward.clone().negate()
   // Rail exterior is about 18 cm beyond the playing surface. Include the
   // native player's 30 cm capsule radius, then step beyond that rectangle.
@@ -16,10 +16,12 @@ export function avatarStance(position, angle, size, floorY, pullback = 0) {
     (Math.sign(backward.x) * halfX - origin.x) / backward.x
   const exitZ = Math.abs(backward.z) < 1e-9 ? Infinity :
     (Math.sign(backward.z) * halfZ - origin.z) / backward.z
-  const distance = Math.max(1.47 + R + 0.012 + pullback + 0.3, Math.min(exitX, exitZ) + 0.04)
+  const distance = Math.max(1.20, Math.min(exitX, exitZ) + 0.04)
   return {
     position: origin.addScaledVector(backward, distance),
-    quaternion: new Quaternion().setFromEuler(new Euler(0, angle - Math.PI / 2, 0, 'YXZ')),
+    // Turn the body slightly across the cue line: left shoulder forward, grip
+    // shoulder back. Facing the cue squarely folds the bridge arm across the chest.
+    quaternion: new Quaternion().setFromEuler(new Euler(0, angle - Math.PI / 2 - 0.35, 0, 'YXZ')),
     distance,
   }
 }
@@ -38,11 +40,11 @@ export function shotPose(position, angle, side = 0, top = 0, elevation = AIM_ELE
   cueDirection.normalize()
   const contact = ball.clone().addScaledVector(across, side * R)
   contact.y += top * R
-  // A 1.47 m cue, positive local Y toward the chalk tip. Its butt extends
-  // Pull the cue back up to 35 cm as shot power increases.
-  const pullback = Math.max(0, Math.min(1, (speed - 0.1) / 4.9)) * 0.35
+  // A 1.47 m cue, positive local Y toward the chalk tip.
+  // The grip arm can comfortably cover this 16 cm power range.
+  const pullback = Math.max(0, Math.min(1, (speed - 0.1) / 4.9)) * 0.16
   const gap = R * Math.sqrt(Math.max(0, 1 - side * side - top * top)) + 0.012 + pullback
-  const cuePosition = contact.addScaledVector(cueDirection, -(0.735 + gap))
+  const cuePosition = contact.clone().addScaledVector(cueDirection, -(0.735 + gap))
   const cueQuaternion = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), cueDirection)
-  return { cameraPosition, cameraQuaternion, cameraTarget: ball, cuePosition, cueQuaternion, pullback }
+  return { cameraPosition, cameraQuaternion, cameraTarget: ball, cuePosition, cueQuaternion, cueDirection, contactPosition: contact, pullback }
 }

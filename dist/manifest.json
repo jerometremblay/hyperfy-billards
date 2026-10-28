@@ -6,7 +6,7 @@
     "author": "jerometremblay-bot",
     "desc": "Server-owned pool practice, Tailuge physics, WPA 8/9-foot surface. GPL-3.0-only.",
     "model": "asset://eda47e6f1c7979c42270d417d8c2504dda431eefe221b91862be6c63685660aa.glb",
-    "script": "asset://51f0b2fe7177d8c61183ccd8f20d6347309e9fd4605a7f8356a935f44d9005b5.js",
+    "script": "asset://a88d2fbecc765312af57a49a62898a2684444658e5fd0387580b841047c01fcc.js",
     "props": {
       "soundHit": {
         "type": "audio",
@@ -217,8 +217,8 @@
     },
     {
       "type": "script",
-      "url": "asset://51f0b2fe7177d8c61183ccd8f20d6347309e9fd4605a7f8356a935f44d9005b5.js",
-      "size": 76083,
+      "url": "asset://a88d2fbecc765312af57a49a62898a2684444658e5fd0387580b841047c01fcc.js",
+      "size": 91159,
       "mime": "text/plain"
     }
   ]

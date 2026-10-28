@@ -43,8 +43,8 @@ test('avatar capsule stays outside the rails and behind the cue over the entire 
             Math.abs(stance.position.z) >= size.width / 2 + 0.48)
           const forward = new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle))
           const behind = stance.position.clone().sub(new THREE.Vector3(x, -0.708, -y)).dot(forward)
-          assert.ok(behind < -(1.47 + physics.BALL_RADIUS + 0.012 + 0.29999))
-          assert.ok(new THREE.Vector3(0, 0, -1).applyQuaternion(stance.quaternion).distanceTo(forward) < 1e-7)
+          assert.ok(behind <= -1.19999)
+          assert.ok(Math.abs(new THREE.Vector3(0, 0, -1).applyQuaternion(stance.quaternion).angleTo(forward) - 0.35) < 1e-7)
         }
   }
 })
@@ -70,6 +70,46 @@ test('mouse movement orbits the ball, changes shot direction and moves the avata
   const size = physics.dimensions()
   assert.ok(Math.abs(local.x) > size.length / 2 + 0.48 || Math.abs(local.z) > size.width / 2 + 0.48)
   assert.equal(active.pointer.locked, true)
+})
+test('eye-camera orbit moves on every frame at 30, 60 and 144 FPS without dead-zone steps', () => {
+  for (const fps of [30, 60, 144]) {
+    const { client, server, players } = setup()
+    const actor = players[0], matrix = new THREE.Matrix4()
+    actor.getBoneTransform = name => {
+      if (!['leftEye', 'rightEye'].includes(name)) return null
+      const root = actor.pose?.root
+      const point = new THREE.Vector3(0, 1, 0)
+      if (root) point.applyQuaternion(new THREE.Quaternion().fromArray(root.quaternion))
+        .add(new THREE.Vector3().fromArray(root.position))
+      else point.applyQuaternion(actor.quaternion).add(actor.position)
+      return matrix.makeTranslation(...point.toArray())
+    }
+    clickPlay(client)
+    client.emit('update', 1 / fps)
+    const control = client.control
+    control.arrowRight.down = true
+    let previous = control.camera.position.clone(), stationary = 0
+    for (let i = 0; i < fps * 2; i++) {
+      server.emit('update', 1 / fps)
+      client.emit('update', 1 / fps)
+      if (control.camera.position.distanceTo(previous) < 1e-7) stationary++
+      previous.copy(control.camera.position)
+    }
+    assert.equal(stationary, 0, `${fps} FPS: ${stationary} frames stuck before a stance jump`)
+    control.arrowRight.down = false
+    const stopped = actor.position.clone()
+    for (let i = 0; i < fps; i++) client.emit('update', 1 / fps)
+    assert.ok(actor.position.distanceTo(stopped) < 1e-7, 'no drift after rotation stops')
+    let teleports = 0
+    const teleport = actor.teleport.bind(actor)
+    actor.teleport = (...args) => { teleports++; teleport(...args) }
+    // Native capsule positions have float rounding and small gravity corrections.
+    for (let i = 0; i < fps; i++) {
+      actor.position.y -= 1e-6
+      client.emit('update', 1 / fps)
+    }
+    assert.equal(teleports, 0, 'native capsule rounding must not cause idle teleports')
+  }
 })
 test('scroll pulls the cue back for more power, pushes it closer for less, and sends that power on strike', () => {
   const { client, server, players } = setup()
@@ -111,37 +151,57 @@ test('scroll pulls the cue back for more power, pushes it closer for less, and s
   assert.equal(cueDistance(), beforeIdle, 'no further power change after scrolling stops')
   control.space.onPress()
   assert.equal(client.sent.findLast(([event]) => event === 'pool:shoot')[1].speed, 1.1)
-  assert.equal(client.activeControl, null)
+  assert.equal(client.activeControl.camera.write, true)
 })
-test('a shot releases every app control and requires another left click to aim again', () => {
+test('a shot releases aiming inputs and starts one native return with the rise', () => {
   const { client, server, players } = setup()
   const target = playSurface(client)
   clickPlay(client)
   client.emit('update', 0.06)
   const aiming = client.control
-  const ballBefore = worldBall(client, server.app.state.pool.balls[0].p)
   aiming.space.onPress()
-  assert.equal(players[0].cameraCalls.length, 1)
-  assert.equal(players[0].cameraCalls[0].zoom, 0.3)
-  assert.equal(players[0].cameraCalls[0].duration, 0.45)
-  assert.ok(players[0].cameraCalls[0].target.distanceTo(ballBefore) < 1e-8)
+  assert.equal(players[0].cameraCalls.length, 1, 'Space does not start the shoulder-camera return')
+  assert.equal(players[0].cameraCalls[0].firstPerson, true)
+  assert.equal(players[0].cameraCalls[0].headOnly, true)
   assert.equal(aiming.camera.write, false)
-  assert.equal(client.activeControl, null)
+  const held = client.activeControl
+  assert.notEqual(held, aiming)
+  assert.equal(held.camera.write, true)
+  assert.equal(held.scrollDelta.capture, true, 'zoom cannot expose the head before the rise finishes')
+  for (const key of ['keyW', 'keyA', 'keyS', 'keyD', 'space', 'escape'])
+    assert.notEqual(held[key].capture, true, 'normal player input is released')
   assert.equal(playHint(client), false)
   const claims = client.sent.filter(([event]) => event === 'pool:claim').length
   target.onPointerDown({ button: 'left' })
   assert.equal(client.sent.filter(([event]) => event === 'pool:claim').length, claims)
-  assert.equal(client.activeControl, null)
-  const position = aiming.camera.position.clone()
-  players[0].position.x += 0.5
-  for (let i = 0; i < 1500; i++) {
-    server.emit('update', 1 / 60)
-    client.emit('update', 1 / 60)
-    assert.equal(client.activeControl, null)
+  let clearedAt = null
+  for (let frame = 1; frame <= 1500; frame++) {
+    server.emit('update', 0.01)
+    client.emit('update', 0.01)
+    if (players[0].pose === null && clearedAt === null) clearedAt = frame
+    if (clearedAt === null) {
+      assert.equal(client.activeControl, held, 'the eye camera remains through the stroke')
+      assert.equal(players[0].cameraCalls.length, 1)
+    } else {
+      assert.equal(client.activeControl, null, 'the native camera moves while the body rises')
+      assert.equal(players[0].cameraCalls.length, 2)
+      if (frame - clearedAt <= 100) {
+        target.onPointerDown({ button: 'left' })
+        assert.equal(client.sent.filter(([event]) => event === 'pool:claim').length, claims)
+      }
+    }
   }
-  assert.ok(aiming.camera.position.equals(position), 'released camera is never written again')
-  assert.equal(players[0].cameraCalls.length, 1, 'no ball tracking after handoff')
+  assert.notEqual(clearedAt, null)
+  assert.equal(client.activeControl, null)
+  assert.equal(held.camera.write, false)
+  assert.equal(players[0].cameraCalls.length, 2, 'one camera return, without tracking moving balls')
+  const returned = players[0].cameraCalls[1]
+  assert.equal(returned.zoom, 0.3)
+  assert.equal(returned.duration, 1)
+  assert.equal(returned.target.isVector3, true)
   assert.equal(server.app.state.pool.moving, false)
+  assert.equal(client.handlers.update.length, 0, 'camera work releases the update callback when idle')
+  assert.equal(client.handlers.lateUpdate.length, 0, 'camera placement also detaches when finished')
   target.onPointerEnter()
   assert.equal(playHint(client), true)
   target.onPointerDown({ button: 'left' })
@@ -212,4 +272,94 @@ test('crossing between cloth and balls keeps the native hint until the pointer l
   surface.onPointerLeave()
   client.emit('update', 1 / 60)
   assert.equal(client.actionPrompts.length, 0)
+})
+
+
+test('aiming hides the local head with native first-person visibility and restores the previous camera on cancellation', () => {
+  const { client, players } = setup()
+  const actor = players[0]
+  const saved = { quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.3, 0.7, 0)),
+    zoom: 2, firstPerson: false }
+  actor.getCamera = () => saved
+  actor.setCamera = options => actor.cameraCalls.push(options)
+  clickPlay(client)
+  client.emit('update', 0.06)
+  assert.equal(actor.cameraCalls[0]?.firstPerson, true,
+    'the native visibility mask prevents the local head from rendering at the eye camera')
+  client.control.escape.onPress()
+  assert.equal(actor.cameraCalls.at(-1).firstPerson, false)
+  assert.equal(actor.cameraCalls.at(-1).zoom, saved.zoom)
+  assert.ok(actor.cameraCalls.at(-1).quaternion.equals(saved.quaternion))
+  assert.equal(actor.pose, null)
+})
+
+
+test('aim and held shot cameras follow the eye midpoint using scratch bone matrices', () => {
+  const { client, server, players } = setup()
+  clickPlay(client)
+  client.emit('update', 0.06)
+  const aiming = client.control
+  const target = worldBall(client, server.app.state.pool.balls[0].p)
+  const centre = aiming.camera.position.clone()
+  const scratch = new THREE.Matrix4()
+  players[0].getBoneTransform = bone => {
+    if (bone === 'leftEye') return scratch.makeTranslation(centre.x - 0.035, centre.y, centre.z)
+    if (bone === 'rightEye') return scratch.makeTranslation(centre.x + 0.035, centre.y, centre.z)
+    return null
+  }
+  client.emit('update', 0.01)
+  assert.ok(aiming.camera.position.distanceTo(centre) < 1e-8)
+  aimedAt(aiming.camera, target)
+  aiming.space.onPress()
+  const held = client.activeControl
+  centre.y += 0.45
+  client.emit('update', 0.01)
+  assert.ok(held.camera.position.distanceTo(centre) < 1e-8, 'the camera follows the eyes during the stroke')
+  aimedAt(held.camera, target)
+  assert.equal(players[0].cameraCalls.length, 1, 'the head remains hidden until the native camera returns')
+  client.emit('destroy')
+  assert.equal(client.activeControl, null)
+})
+
+test('the eye camera supports one eye or a head bone when a VRM has no eye bones', () => {
+  for (const bone of ['leftEye', 'rightEye', 'head']) {
+    const { client, players } = setup()
+    const position = new THREE.Vector3(0.2, 1.1, 0.6)
+    players[0].getBoneTransform = name => name === bone ? new THREE.Matrix4().makeTranslation(...position.toArray()) : null
+    clickPlay(client)
+    client.emit('update', 0.06)
+    assert.ok(client.control.camera.position.distanceTo(position) < 1e-8)
+    client.emit('destroy')
+  }
+})
+
+test('a shot without a server response releases the held camera after timeout and rise', () => {
+  const { client, players } = setup()
+  clickPlay(client)
+  client.emit('update', 0.06)
+  client.app.deliver = () => {}
+  client.control.space.onPress()
+  assert.ok(client.activeControl.camera.write)
+  for (let frame = 0; frame < 350; frame++) client.emit('update', 0.01)
+  assert.equal(client.activeControl, null)
+  assert.equal(players[0].cameraCalls.length, 2)
+})
+
+
+test('the eye camera reads the solved pose in lateUpdate after an orbit turn', () => {
+  const { client, server, players } = setup()
+  clickPlay(client)
+  client.emit('update', 0.06)
+  const aiming = client.control
+  const target = worldBall(client, server.app.state.pool.balls[0].p)
+  const eyes = aiming.camera.position.clone()
+  players[0].getBoneTransform = bone => bone === 'leftEye' || bone === 'rightEye'
+    ? new THREE.Matrix4().makeTranslation(...eyes.toArray()) : null
+  for (const update of client.handlers.update) update(0.01)
+  eyes.add(new THREE.Vector3(0.08, 0.2, 0))
+  for (const lateUpdate of client.handlers.lateUpdate) lateUpdate(0.01)
+  assert.ok(aiming.camera.position.distanceTo(eyes) < 1e-8)
+  aimedAt(aiming.camera, target)
+  aiming.escape.onPress()
+  assert.equal(client.handlers.lateUpdate.length, 0)
 })

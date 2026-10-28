@@ -3,6 +3,8 @@ import { BALL_RADIUS as R } from './simulation.js'
 import { createSounds } from './sound.js'
 import { CUE_EVENT, POSE_EVENT, watchCues } from './cues.js'
 import { shotPose, avatarStance, AIM_ELEVATION } from './aim.js'
+import { playerAimPose, playerMeasurements } from './player-pose.js'
+import { strokePose, STROKE_END } from './stroke.js'
 
 export function startClient(world, app, { balls, ghost, surfaceTarget, size, playChannel, soundSources }) {
   if (!world.getPlayer) return
@@ -19,19 +21,23 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   let latest = app.state?.pool, frames = [], clock = 0, control = null, idle = null
   let pending = false, requestedAt = 0, shotPending = false, shotRequestSeq = -1, ping = 0, sinceAim = 0
   let angle = 0, speed = 2.5, side = 0, top = 0
-  let elevation = AIM_ELEVATION, floorY = 0, lastStanceAt = -1
+  let elevation = AIM_ELEVATION, floorY = 0
+  let aimStance = null
   let placeX = -size.length / 4, placeY = 0
   let cueHolders = latest?.cueHolders || [], aim = app.state?.aim, posedPlayer = null
   const sounds = createSounds(app, soundSources || {})
   const volumeEvent = `billard:volume:${playChannel}`
   world.on(volumeEvent, value => sounds.setVolume(value))
   app.emit(`${volumeEvent}:request`)
+  let poseMeasurements = null, savedCamera = null, cameraHold = null
+  let aimCameraPosition = null, aimCameraTarget = null
+  const riseDuration = 1
   let soundEvents = [], lastEventId = latest?.lastEventId || 0
   const cueEvent = CUE_EVENT
   const aimingEvent = `billard:aiming:${playChannel}`
   const poseEvent = POSE_EVENT
   const hasCue = () => cueHolders.includes(me.id)
-  const canPlay = () => hasCue() && !control && !pending && !shotPending && !latest?.moving && !latest?.owner
+  const canPlay = () => hasCue() && !control && !cameraHold && !pending && !shotPending && !latest?.moving && !latest?.stroke && !latest?.owner
   const ui = app.create('ui', {
     space: 'screen', width: 620, height: 92, position: [0.5, 1, 0],
     offset: [0, -24, 0], pivot: 'bottom-center', backgroundColor: '#101b29',
@@ -68,7 +74,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     hintMode = null
   }
   const refresh = () => {
-    const waiting = hoveredTargets.size > 0 && (shotPending || latest?.moving) && me.position.distanceTo(app.position) < 15
+    const waiting = !cameraHold && hoveredTargets.size > 0 && (shotPending || latest?.moving || latest?.stroke) && me.position.distanceTo(app.position) < 15
     const mode = waiting ? 'waiting' : canPlay() && hoveredTargets.size > 0 ? 'play' : null
     if (mode !== hintMode) {
       if (mode) {
@@ -96,15 +102,38 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     }
   }
   const clearPose = () => {
-    if (posedPlayer) app.emit(poseEvent, { playerId: posedPlayer, tableId: app.instanceId, clear: true })
+    if (posedPlayer) {
+      app.emit(poseEvent, { playerId: posedPlayer, tableId: app.instanceId, clear: true })
+      world.getPlayer(posedPlayer)?.setPose?.(null, { duration: riseDuration })
+      if (posedPlayer === me.id && cameraHold) returnCamera()
+    }
+    poseMeasurements = null
     posedPlayer = null
   }
-  const stop = (release = true) => {
+  const returnCamera = () => {
+    if (!cameraHold || cameraHold.returnAt !== null) return
+    const held = cameraHold
+    held.returnAt = clock + riseDuration
+    app.off('lateUpdate', updateCamera)
+    if (held.control) {
+      held.control.camera.write = false
+      held.control.release()
+      held.control = null
+    }
+    me.setCamera?.({ target: held.target, zoom: 0.3, duration: riseDuration })
+    refresh()
+  }
+  const stop = (release = true, keepPose = false) => {
     const active = control
     control = null
     pending = false
-    clearPose()
+    if (!keepPose) clearPose()
     if (active) { active.camera.write = false; active.release() }
+    if (!cameraHold) app.off('lateUpdate', updateCamera)
+    if (savedCamera) {
+      me.setCamera?.({ ...savedCamera, duration: 0.2 })
+      savedCamera = null
+    }
     if (release && active) app.send('pool:release', {})
     idle?.release()
     idle = null
@@ -128,17 +157,32 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       control[key].capture = true
     control.camera.write = true
     control.camera.zoom = 0
+    app.on('lateUpdate', updateCamera)
+    savedCamera = me.getCamera?.() || null
+    const ball = latest.balls[0].p
+    me.setCamera?.({ target: worldPosition(new Vector3(ball[0], R + ball[2], -ball[1])), firstPerson: true, headOnly: true })
     control.scrollDelta.capture = true
     control.space.onPress = () => {
       if (!latest || latest.moving || !hasCue()) return
       if (latest.scratched) placeCueBall()
       else {
         const ball = latest.balls[0].p
-        me.setCamera?.({ target: worldPosition(new Vector3(ball[0], R + ball[2], -ball[1])), zoom: 0.3, duration: 0.45 })
+        cameraHold = { control: null, returnAt: null,
+          position: control.camera.position.clone(),
+          target: worldPosition(new Vector3(ball[0], R + ball[2], -ball[1])) }
+        savedCamera = null // Return to the shoulder view as the avatar stands.
         shotPending = true
+        requestedAt = clock
         shotRequestSeq = latest.seq
-        request('shoot', { angle, speed, side, top })
-        stop()
+        request('shoot', { angle, speed, side, top, animate: true })
+        stop(true, true)
+        // Release aiming inputs now, retaining only the camera through the stroke.
+        cameraHold.control = app.control()
+        cameraHold.control.camera.write = true
+        cameraHold.control.camera.zoom = 0
+        cameraHold.control.scrollDelta.capture = true
+        writeAimCamera(cameraHold.control.camera, cameraHold.position, cameraHold.target)
+        wake()
       }
     }
     control.mouseLeft.onPress = placeCueBall
@@ -147,9 +191,9 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     ui.active = true
     sinceAim = 1
     elevation = AIM_ELEVATION
+    aimStance = null
     const local = me.position.clone().sub(app.position).applyQuaternion(app.quaternion.clone().invert())
     floorY = local.y < -0.35 ? local.y : -0.708
-    lastStanceAt = -1
   }
   const receive = snapshot => {
     if (!snapshot || (latest && snapshot.seq <= latest.seq)) return
@@ -171,9 +215,9 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     frames.push({ at: clock, snapshot })
     frames = frames.slice(-8)
     if (latest.owner === me.id && !latest.moving && hasCue()) begin()
-    else if (control) stop(false)
+    else if (control) stop(false, !!cameraHold)
     if (!hasCue() || latest.moving || (latest.owner && latest.owner !== me.id)) pending = false
-    if (!latest.owner || latest.moving) clearPose()
+    // Pose release follows buffered playback in update, rather than the newest packet.
     if (!pending && idle) { idle.release(); idle = null }
     refresh()
     wake()
@@ -197,7 +241,8 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     if (isNearby()) setBallsActive(true)
     idle = app.control()
     idle.pointer.lock()
-    app.send('pool:claim', { angle })
+    poseMeasurements = playerMeasurements(me)
+    app.send('pool:claim', { angle, cueOffset: poseMeasurements.cueOffset })
     refresh()
     wake()
   }
@@ -211,6 +256,31 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   app.emit(`${cueEvent}:request`)
   const axis = new Vector3()
   const worldPosition = local => local.clone().multiply(app.scale).applyQuaternion(app.quaternion).add(app.position)
+  const writeAimCamera = (camera, position, target) => {
+    camera.position.copy(position)
+    // Bone transforms reuse a scratch matrix, so copy each eye before reading
+    // the next. Keep the camera at the solved eye midpoint through the stroke.
+    const leftEye = me.getBoneTransform?.('leftEye')
+    if (leftEye) camera.position.setFromMatrixPosition(leftEye)
+    const rightEye = me.getBoneTransform?.('rightEye')
+    if (rightEye) {
+      const right = new Vector3().setFromMatrixPosition(rightEye)
+      if (leftEye) camera.position.add(right).multiplyScalar(0.5)
+      else camera.position.copy(right)
+    } else if (!leftEye) {
+      const head = me.getBoneTransform?.('head')
+      if (head) camera.position.setFromMatrixPosition(head)
+    }
+    const look = target.clone().sub(camera.position)
+    camera.quaternion.setFromEuler(new Euler(
+      Math.atan2(look.y, Math.hypot(look.x, look.z)), Math.atan2(-look.x, -look.z), 0, 'YXZ'))
+  }
+  const updateCamera = () => {
+    if (control && aimCameraPosition && aimCameraTarget)
+      writeAimCamera(control.camera, aimCameraPosition, aimCameraTarget)
+    else if (cameraHold?.control)
+      writeAimCamera(cameraHold.control.camera, cameraHold.position, cameraHold.target)
+  }
   update = dt => {
     if (!Number.isFinite(dt) || dt <= 0) return
     clock += dt
@@ -219,6 +289,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       refresh()
     }
     if (pending && clock - requestedAt > 2) stop(false)
+    if (shotPending && clock - requestedAt > 2) { shotPending = false; clearPose(); refresh() }
     const nearby = isNearby()
     if (nearby) setBallsActive(true)
     if (!nearby) { if (control) stop(); clearPose(); sounds.clear(); soundEvents = [] }
@@ -245,6 +316,10 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
           new Quaternion().setFromAxisAngle(axis.multiplyScalar(1 / rotationSpeed), rotationSpeed * Math.min(dt, 0.1)))
       })
     }
+    const strokeFrame = a?.snapshot.stroke ? a : latest?.stroke ? { at: clock, snapshot: latest } : null
+    const stroke = strokeFrame?.snapshot.stroke
+    const strokeElapsed = stroke ? Math.max(0, Math.min(STROKE_END,
+      stroke.elapsed + renderAt - strokeFrame.at)) : 0
     const soundsActive = sounds.update(clock)
     if (nearby && control && (me.position.distanceTo(app.position) > 5 || !hasCue())) stop()
     if (control) {
@@ -278,18 +353,15 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       const ball = latest?.scratched ? [placeX, placeY, 0] : latest?.balls[0]?.p
       if (ball) {
         const pose = shotPose(ball, angle, side, top, elevation, speed)
-        control.camera.position.copy(worldPosition(pose.cameraPosition))
-        control.camera.quaternion.copy(app.quaternion).multiply(pose.cameraQuaternion)
-        // Use the normal player teleport API to keep the complete capsule
-        // outside the rail exterior and the avatar behind the cue's butt.
-        if (clock - lastStanceAt >= 0.05) {
-          const stance = avatarStance(ball, angle, size, floorY, pose.pullback)
-          const position = worldPosition(stance.position)
-          const quaternion = app.quaternion.clone().multiply(stance.quaternion)
-          if (me.position.distanceTo(position) > 0.025 || me.quaternion.angleTo(quaternion) > 0.02)
-            me.teleport(position, new Euler().setFromQuaternion(quaternion, 'YXZ').y)
-          lastStanceAt = clock
-        }
+        aimCameraPosition = worldPosition(pose.cameraPosition)
+        aimCameraTarget = worldPosition(pose.cameraTarget)
+        // Predict only the local rendered stance. The server validates aim and
+        // moves the actual player; its delayed transform cannot pull this view back.
+        if (!poseMeasurements) poseMeasurements = playerMeasurements(me)
+        const stance = avatarStance(ball, angle, size, aim?.floorY ?? floorY,
+          aim?.cueOffset ?? poseMeasurements.cueOffset)
+        aimStance = { position: worldPosition(stance.position),
+          quaternion: app.quaternion.clone().multiply(stance.quaternion) }
       }
       sinceAim += dt
       if (sinceAim >= 0.1) {
@@ -311,24 +383,54 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     }
     const aiming = shooter && !latest.moving && !latest.scratched &&
       (shooter === me.id ? !!control : aim?.playerId === shooter)
-    if (aiming && latest.balls[0]) {
-      const params = shooter === me.id ? { angle, side, top, speed } : aim
-      const pose = shotPose(latest.balls[0].p, params.angle, params.side, params.top, AIM_ELEVATION, params.speed)
-      if (posedPlayer && posedPlayer !== shooter) clearPose()
-      posedPlayer = shooter
-      app.emit(poseEvent, { playerId: shooter, tableId: app.instanceId, position: worldPosition(pose.cuePosition).toArray(),
-        quaternion: app.quaternion.clone().multiply(pose.cueQuaternion).toArray() })
-    } else clearPose()
+    const actor = stroke?.playerId || (aiming ? shooter : null)
+    const player = actor && world.getPlayer(actor)
+    if (nearby && player && cueHolders.includes(actor) && (stroke || aiming)) {
+      const params = actor === me.id ? { angle, side, top, speed } : aim
+      const pose = stroke ? strokePose(stroke, strokeElapsed) :
+        shotPose(latest.balls[0].p, params.angle, params.side, params.top, AIM_ELEVATION, params.speed)
+      if (posedPlayer && posedPlayer !== actor) clearPose()
+      if (poseMeasurements && Number.isFinite(player.height) && Math.abs(player.height - poseMeasurements.height) > 0.05) {
+        player.setPose?.(null)
+        poseMeasurements = null
+      }
+      if (!poseMeasurements) poseMeasurements = playerMeasurements(player)
+      posedPlayer = actor
+      if (actor === me.id && cameraHold) cameraHold.returnAt = null
+      const cuePosition = worldPosition(pose.cuePosition)
+      const cueQuaternion = app.quaternion.clone().multiply(pose.cueQuaternion)
+      const predicted = actor === me.id && (control || cameraHold) && aimStance
+      const avatarPose = playerAimPose(predicted || player, cuePosition, cueQuaternion,
+        worldPosition(pose.cameraTarget), poseMeasurements)
+      if (predicted) avatarPose.root = { position: predicted.position.toArray(),
+        quaternion: predicted.quaternion.toArray() }
+      player.setPose?.(avatarPose)
+      app.emit(poseEvent, { playerId: actor, tableId: app.instanceId,
+        position: cuePosition.toArray(), quaternion: cueQuaternion.toArray() })
+    } else if (control && latest?.scratched && aimStance) {
+      posedPlayer = me.id
+      me.setPose?.({ root: { position: aimStance.position.toArray(),
+        quaternion: aimStance.quaternion.toArray() } })
+    } else if (!shotPending) clearPose()
+    if (cameraHold) {
+      if (cameraHold.returnAt === null && !shotPending && !stroke && posedPlayer !== me.id) returnCamera()
+      if (cameraHold.returnAt !== null && clock - cameraHold.returnAt > 1e-8) {
+        cameraHold = null
+        refresh()
+      }
+    }
     // Stop native frame dispatch once interpolation, sounds and input are idle.
-    if (!control && !pending && !hoverRefreshPending && !latest?.moving &&
+    if (!control && !cameraHold && !pending && !shotPending && !stroke && !hoverRefreshPending && !latest?.moving &&
         frames.length <= 1 && soundEvents.length === 0 && !soundsActive) {
       app.off('update', update)
       updateAttached = false
     }
   }
-  if (latest?.moving || latest?.owner) wake()
+  if (latest?.moving || latest?.owner || latest?.stroke) wake()
   app.on('destroy', () => {
     stop()
+    returnCamera()
+    cameraHold = null
     clearPlayHint()
   })
 }

@@ -74,7 +74,7 @@ test('low camera stays behind the ball and the physical cue points through the s
     assert.ok(new THREE.Vector3().crossVectors(ball.clone().sub(tip), cueForward).length() < 1e-10)
   }
 })
-test('the held cue aligns for shooter and late observer, then returns to hand on strike', () => {
+test('the held cue aligns for shooter and late observer, then returns to hand after follow-through', () => {
   const { players, rack, game } = setup()
   rack.emit('take-cue', { slot: 0 }, 'socket-a')
   const clientBus = {}
@@ -100,8 +100,14 @@ test('the held cue aligns for shooter and late observer, then returns to hand on
   const aiming = client.control
   aiming.space.onPress()
   assert.equal(aiming.camera.write, false)
-  assert.equal(client.activeControl, null)
+  assert.equal(client.activeControl.camera.write, true)
+  assert.notEqual(client.activeControl.space.capture, true)
   assert.equal(game.app.state.pool.owner, null)
+  assert.equal(game.app.state.pool.shots, 0, 'strike waits for the cue to reach the white')
+  for (let i = 0; i < 60; i++) {
+    game.emit('update', 1 / 60)
+    client.emit('update', 1 / 60)
+  }
   assert.equal(game.app.state.pool.shots, 1)
   clientRack.emit('update', 1 / 60)
   assert.ok(cue.position.distanceTo(pose.cuePosition.clone().add(client.app.position)) > 0.1)
@@ -109,7 +115,7 @@ test('the held cue aligns for shooter and late observer, then returns to hand on
   assert.equal(rack.app.state.holders[0], 'alice')
   assert.equal(client.created.some(n => n.name === 'prim' && n.emissiveIntensity > 0), false)
 })
-test('all game controls release immediately without waiting for a server response', () => {
+test('aiming inputs release immediately while the camera waits for the shot and rise', () => {
   const { players, rack, game } = setup()
   rack.emit('take-cue', { slot: 0 }, 'socket-a')
   const client = harness({ players, state: structuredClone(game.app.state) })
@@ -121,7 +127,8 @@ test('all game controls release immediately without waiting for a server respons
   client.app.deliver = () => {} // Network response held back.
   aiming.space.onPress()
   assert.equal(aiming.camera.write, false)
-  assert.equal(client.activeControl, null)
+  assert.equal(client.activeControl.camera.write, true)
+  assert.notEqual(client.activeControl.space.capture, true)
   assert.equal(client.created.find(n => n.name === 'ui').active, false)
 })
 test('orbiting updates the held cue in the camera frame regardless of rack update order', () => {

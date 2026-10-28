@@ -46,7 +46,14 @@ test('adding one pool table includes the simulator, cloth-height balls, sounds a
   const ballWorldY = client.app.position.y + root.position.y + white.position.y
   assert.ok(active.camera.position.y > ballWorldY)
   active.space.onPress()
+  assert.equal(server.app.state.pool.shots, 0, 'white waits for the animated stroke')
+  for (let i = 0; i < 25; i++) server.emit('update', 1 / 60)
   assert.equal(server.app.state.pool.shots, 1)
+  assert.equal(client.activeControl.camera.write, true, 'camera stays forward through the stroke and rise')
+  for (let i = 0; i < 100; i++) {
+    server.emit('update', 1 / 60)
+    client.emit('update', 1 / 60)
+  }
   assert.equal(client.activeControl, null)
 })
 

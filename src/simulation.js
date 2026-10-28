@@ -65,7 +65,7 @@ export class Simulation {
   get scratched() {
     return !this.table.cueball.onTable()
   }
-  shoot({ angle, speed, side = 0, top = 0 } = {}) {
+  canShoot({ angle, speed, side = 0, top = 0 } = {}) {
     if (
       this.error ||
       this.moving ||
@@ -77,6 +77,10 @@ export class Simulation {
       Math.hypot(side, top) > 0.45
     )
       return false
+    return true
+  }
+  shoot({ angle, speed, side = 0, top = 0 } = {}) {
+    if (!this.canShoot({ angle, speed, side, top })) return false
     const strike = cueStrike(angle, speed, new Vector3(side, top, 0), 0)
     this.table.cueball.vel.copy(strike.vel)
     this.table.cueball.rvel.copy(strike.rvel)

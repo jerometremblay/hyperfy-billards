@@ -1,7 +1,10 @@
+import { Euler } from 'three'
 import { Simulation, STEP, BALL_RADIUS } from './simulation.js'
+import { avatarStance } from './aim.js'
 import { CUE_EVENT, watchCues } from './cues.js'
+import { STROKE_CONTACT, STROKE_END } from './stroke.js'
 
-// Physics runs only while balls move; ownership expires on a wall-clock timer.
+// Updates run only while a stroke or balls move; ownership expires on a wall-clock timer.
 export function startServer(world, app, preset) {
   const sim = new Simulation(preset)
   let owner = null,
@@ -12,15 +15,20 @@ export function startServer(world, app, preset) {
     sinceSnapshot = 0,
     cueHolders = [],
     aim = null,
+    stroke = null,
     lastAimAt = -Infinity,
     updateAttached = false,
-    leaseTimerScheduled = false
+    leaseTimerScheduled = false,
+    stanceFloorY = -0.708,
+    stanceCueOffset = 0.28,
+    lastStance = null
   const publish = () => {
     app.state.aim = aim
     app.state.pool = {
       ...sim.snapshot(),
       owner,
       aim,
+      stroke: stroke ? { ...stroke } : null,
       cueHolders: cueHolders.slice(),
       seq: ++seq,
       rack,
@@ -37,6 +45,17 @@ export function startServer(world, app, preset) {
   const authorized = sender => {
     const player = playerFor(sender)
     return player && player.id === owner && cueHolders.includes(player.id) && nearby(player)
+  }
+  const moveStance = (player, angle, placement = null) => {
+    const ball = placement ? [placement.x, placement.y, 0] : sim.table.cueball.pos.toArray()
+    const stance = avatarStance(ball, angle, sim.size, stanceFloorY, stanceCueOffset)
+    const position = stance.position.multiply(app.scale).applyQuaternion(app.quaternion).add(app.position)
+    const quaternion = app.quaternion.clone().multiply(stance.quaternion)
+    if (!lastStance || lastStance.position.distanceTo(position) > 1e-7 ||
+        lastStance.quaternion.angleTo(quaternion) > 1e-7) {
+      player.teleport(position, new Euler().setFromQuaternion(quaternion, 'YXZ').y)
+      lastStance = { position, quaternion }
+    }
   }
   const scheduleLeaseExpiry = () => {
     // Renewing a lease reuses its pending timer instead of adding frame work.
@@ -63,6 +82,7 @@ export function startServer(world, app, preset) {
       owner = aim = null
       leaseUntil = 0
     }
+    if (stroke && !stroke.hit && !cueHolders.includes(stroke.playerId)) stroke = null
     publish()
   })
   const refreshCues = () => app.emit(`${cueEvent}:request`)
@@ -83,7 +103,7 @@ export function startServer(world, app, preset) {
   }
   const update = dt => {
     if (!Number.isFinite(dt) || dt <= 0) return
-    if (!sim.moving) {
+    if (!sim.moving && !stroke) {
       accumulator = 0
       app.off('update', update)
       updateAttached = false
@@ -91,22 +111,35 @@ export function startServer(world, app, preset) {
     }
     // A stall slows the simulation rather than producing one giant physics step.
     accumulator = Math.min(accumulator + dt, 0.25)
-    while (accumulator >= STEP && sim.moving) {
-      sim.step()
+    while (accumulator >= STEP && (sim.moving || stroke)) {
+      if (stroke) {
+        const player = world.getPlayer(stroke.playerId)
+        if (!stroke.hit && (!nearby(player) || !cueHolders.includes(stroke.playerId))) stroke = null
+        if (stroke) {
+          stroke.elapsed += STEP
+          if (!stroke.hit && stroke.elapsed + 1e-9 >= STROKE_CONTACT) {
+            stroke.hit = sim.shoot(stroke)
+            if (!stroke.hit) stroke = null
+          }
+          if (stroke && stroke.elapsed + 1e-9 >= STROKE_END) stroke = null
+        }
+      }
+      if (sim.moving) sim.step()
       accumulator -= STEP
     }
     sinceSnapshot += dt
-    if (sinceSnapshot >= 0.05 || !sim.moving) {
+    if (sinceSnapshot >= 0.05 || (!sim.moving && !stroke)) {
       sinceSnapshot = 0
       publish()
     }
-    if (!sim.moving) {
+    if (!sim.moving && !stroke) {
+      accumulator = 0
       app.off('update', update)
       updateAttached = false
     }
   }
   const startUpdates = () => {
-    if (sim.moving && !updateAttached) {
+    if ((sim.moving || stroke) && !updateAttached) {
       updateAttached = true
       app.on('update', update)
     }
@@ -115,10 +148,16 @@ export function startServer(world, app, preset) {
     refreshCues()
     expire()
     const player = playerFor(sender)
-    if (!sim.moving && nearby(player) && cueHolders.includes(player.id) && (!owner || owner === player.id)) {
+    if (!sim.moving && !stroke && nearby(player) && cueHolders.includes(player.id) && (!owner || owner === player.id)) {
       owner = player.id
+      const local = player.position.clone().sub(app.position).applyQuaternion(app.quaternion.clone().invert())
+      stanceFloorY = local.y < -0.35 ? local.y : -0.708
+      stanceCueOffset = Number.isFinite(request?.cueOffset) ? Math.max(0.24, Math.min(0.4, request.cueOffset)) : 0.28
+      lastStance = null
       aim = { playerId: owner, angle: validAim(request) ? request.angle : 0, side: 0, top: 0,
+        floorY: stanceFloorY, cueOffset: stanceCueOffset,
         placement: sim.scratched ? { x: -sim.size.length / 4, y: 0 } : null }
+      moveStance(player, aim.angle, aim.placement)
       lastAimAt = -Infinity
       renewLease()
       publish()
@@ -139,7 +178,7 @@ export function startServer(world, app, preset) {
   app.on('pool:aim', (request, sender) => {
     expire()
     const now = Date.now()
-    if (!authorized(sender) || sim.moving || !validAim(request) || now - lastAimAt < 50) return
+    if (!authorized(sender) || sim.moving || stroke || !validAim(request) || now - lastAimAt < 50) return
     const placement = sim.scratched ? request.placement : null
     if (sim.scratched && (!placement || ![placement.x, placement.y].every(Number.isFinite) ||
         Math.abs(placement.x) > sim.size.length / 2 - 2 * BALL_RADIUS ||
@@ -151,8 +190,10 @@ export function startServer(world, app, preset) {
       side: request.side ?? 0,
       top: request.top ?? 0,
       speed: request.speed ?? 2.5,
+      floorY: stanceFloorY, cueOffset: stanceCueOffset,
       placement: placement ? { x: placement.x, y: placement.y } : null,
     }
+    moveStance(playerFor(sender), aim.angle, aim.placement)
     app.state.aim = aim
     // Aim packets must not invalidate the sequence used by a following shot.
     app.send('pool:aim', aim)
@@ -166,8 +207,20 @@ export function startServer(world, app, preset) {
       renewLease()
       let accepted = false
       if (operation === 'shoot') {
-        accepted = sim.shoot(request)
-        if (accepted) owner = aim = null
+        if (request.animate === true && !stroke && sim.canShoot(request)) {
+          moveStance(playerFor(sender), request.angle)
+          stroke = { id: seq + 1, playerId: owner, angle: request.angle, speed: request.speed,
+            side: request.side ?? 0, top: request.top ?? 0, ball: sim.table.cueball.pos.toArray(),
+            elapsed: 0, hit: false }
+          accepted = true
+        } else if (!stroke && request.animate !== true) {
+          accepted = sim.shoot(request)
+          if (accepted) moveStance(playerFor(sender), request.angle)
+        }
+        if (accepted) {
+          owner = aim = null
+          leaseUntil = 0
+        }
       }
       if (operation === 'place') accepted = sim.place(request.x, request.y)
       if (operation === 'reset' && !sim.moving) {
@@ -176,12 +229,21 @@ export function startServer(world, app, preset) {
         accepted = true
       }
       if (accepted) {
-        if (aim) aim.placement = null
+        if (aim) {
+          aim.placement = null
+          moveStance(playerFor(sender), aim.angle)
+        }
         publish()
         startUpdates()
       }
     })
   }
+  world.on('leave', ({ playerId }) => {
+    if (stroke?.playerId === playerId && !stroke.hit) {
+      stroke = null
+      publish()
+    }
+  })
   refreshCues()
   publish()
   return sim

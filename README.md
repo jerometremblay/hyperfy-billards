@@ -19,6 +19,12 @@ open-source pool project by tailuge and contributors. The physics solver and
 original table model are adapted from that project under GPL-3.0. See
 [third-party attribution](THIRD_PARTY.md) for the pinned revision and changes.
 
+## Showcase
+
+[![Watch Hyperfy Billards on YouTube](https://i.ytimg.com/vi/Mat5QP7DeGY/hqdefault.jpg)](https://youtu.be/Mat5QP7DeGY)
+
+[Watch the gameplay showcase on YouTube](https://youtu.be/Mat5QP7DeGY).
+
 ## Included pool-room objects
 
 `npm run build` produces four self-contained Hyperfy packages in `dist/collection/`:
@@ -92,24 +98,34 @@ The server checks actual rack
 ownership before granting controls and again on each shot/place/reset. Pickup
 and return identify players from the transport sender.
 
-The aiming camera starts 68 cm behind the cue ball and 14 cm above its centre.
-Mouse movement orbits that ball and changes aim; vertical movement changes the
-viewing elevation. The avatar moves around the outside of the rails, behind the
-cue's butt, with clearance for its full collision capsule.
-The actual held 1.47 m cue aligns behind the
-ball, including spin offsets; other players see its aiming pose too. There is
-no trajectory line. This is a low camera view; it does not replace the avatar's
-standing animation with a custom crouching animation.
+The aiming camera sits at the midpoint of the avatar's eye bones, looking at
+the cue ball. The local avatar and eye view predict the stance from the current
+input every frame, without waiting for a server reply or changing the player's
+physical transform. The server validates aim and calculates the actual stance;
+observers receive that accepted movement and aim later. Ball positions,
+placement acceptance, collision physics and shots remain server-owned.
+The camera follows the solved eyes during the stroke. The local visual
+stance stays predicted through the stroke; standing begins once buffered playback
+finishes, so delayed packets cannot restart the pose. Native
+head-only first-person visibility hides the local head while keeping the arms
+and body visible; other players still see the full avatar. VRMs with one eye use that eye, and those without eye bones use the head
+bone. Mouse movement orbits the ball and changes aim. Cancelling restores the
+previous camera. The avatar moves close enough to hold the cue while its
+collision capsule stays outside the rails. The actual held 1.47 m cue aligns
+behind the ball, including spin offsets. Other players see both the cue and the
+avatar's low aiming stance. There is no trajectory line.
 
 - Mouse or left/right arrows: turn aim. Scroll back to pull the cue farther from
   the ball for a stronger shot; scroll closer for less force (0.1–5 m/s).
   Up/down arrows also adjust power. Other players see the cue's pullback.
 - W/S: top/back spin. A/D: side spin. Offset is limited to 0.45 ball radii.
-- Space: shoot, return the cue to the hand and release all game camera/input
-  controls immediately. The native player camera resumes at its nearest third-person
-  zoom (0.3 m) with a 0.45-second eased motion, looking toward the cue ball at
-  the instant of the shot. Normal mouse
-  look, movement, zoom and wall collision remain active; no ball tracking follows. Click Play on the table again for your next shot.
+- Space: start the forward stroke and release aiming inputs immediately.
+  The white is struck after 0.30 seconds when the cue reaches it; the grip arm
+  and cue follow through, then the avatar rises over one second. The aiming
+  camera returns directly to the final native third-person view at its nearest
+  zoom (0.3 m), in one eased movement during that same second. The head stays
+  hidden until the return finishes. Normal movement remains available; mouse look, zoom and wall collision
+  resume with the native camera. Click Play on the table again for your next shot.
 - After a scratch: mouse or left/right arrows orbit the white ball as usual.
   WASD moves the actual white-ball mesh across the cloth relative to the view
   (W forward, S backward, A left, D right), with the camera following its position.
@@ -125,6 +141,39 @@ table. Returning the cue also cancels aiming. A client renews the lease every
 15 seconds while aiming. Each accepted strike releases ownership. Balls continue
 moving after their shooter leaves. A server restart or blueprint rebuild starts
 a fresh rack; in-progress practice is not persisted.
+
+## Avatar aiming and stroke
+
+The stance uses Hyperfy's existing normalized VRM poses and WebXR arm/hand IK,
+through this fork's client-only `player.setPose` method. The body leans over the
+cue with bent knees; the open bridge stays on the cloth and the closed grip
+follows the cue. Existing avatar height and bone measurements adapt the crouch,
+and shoulder width keeps the cue outside the torso. A slight body turn places
+the bridge shoulder forward and the grip shoulder back. The bridge hand reaches
+ahead of its elbow, and the grip elbow bends upward in the cue plane. The grip
+uses native articulated hand poses: curved fingers surround the actual shaft
+and the thumb points toward the ball. The approved grip is 10 cm farther back
+for Jay's avatar, leaving room for the forearm throughout follow-through; the
+existing height adjustment fits other avatars. Native IK retains each avatar's
+real arm lengths. Power pulls the cue back
+up to 16 cm. The server reserves the table during a brief pause and accelerating
+forward stroke, strikes once at contact, and shares the follow-through state
+with observers and late joiners. Escaping aim, returning a cue, leaving, or
+removing the app restores normal animation. A cue return or disconnect before
+impact cancels the pending strike. Rendering and physics callbacks sleep again
+when their work finishes.
+
+The movement is based on [WPBSA coaching basics](https://wpbsa.com/wp-content/uploads/WPBSA-The-Basics-updated-AMEND-MAY-2021-002.pdf)
+(fixed bridge, low head, grip forearm underneath the elbow) and
+[Dr. Dave's stroke guidance](https://drdavepoolinfo.com/resource_files/stroke_best_practices.pdf)
+(backstroke pause, smooth acceleration, follow-through, steady body).
+The same aiming and stroke code is rendered by every nearby client; body poses
+are not sent as per-bone network packets. Clients without this fork's `setPose`
+API still display the physical cue and play the timed shot.
+
+This is a first procedural stance rather than motion capture. Extremely short
+avatars and long reaches across the table can hit the native arm-reach limit;
+limbs are not stretched, and a mechanical bridge is not included.
 
 ## Fit it to an artist's table
 
@@ -216,3 +265,5 @@ when distributing the `.hyp`; provide the accompanying source archive too.
 The close shot handoff requires this fork's local `player.setCamera({target, zoom})` API. Reload clients after updating the engine build.
 
 Play is hidden while aiming. Each new aiming session resets top and side spin to zero.
+
+After follow-through, the solved body, arms and fingers blend back into normal avatar animation over 450 ms on each client. A new aim cancels that transition; the table needs no extra idle frame callback.

@@ -8,7 +8,7 @@ import * as THREE from 'three'
 export const root = fileURLToPath(new URL('../', import.meta.url))
 const temp = await mkdtemp(`${tmpdir()}/hyperfy-billard-test-`)
 await build({
-  stdin: { contents: "export * from './src/simulation.js'; export * from './src/aim.js'", resolveDir: root },
+  stdin: { contents: "export * from './src/simulation.js'; export * from './src/aim.js'; export * from './src/stroke.js'; export * from './src/player-pose.js'", resolveDir: root },
   bundle: true,
   format: 'esm',
   platform: 'node',
@@ -172,10 +172,12 @@ export function harness({ instanceId = `test-app-${++nextInstanceId}`, server = 
     emit(name, value, sender) {
       if (name === 'update' && Number.isFinite(value) && value > 0) advance(value * 1000)
       for (const fn of handlers[name] || []) fn(value, sender)
+      // Native frame order positions app cameras after the avatar animation update.
+      if (name === 'update') for (const fn of handlers.lateUpdate || []) fn(value)
     },
   }
 }
 export function player(id, networkId = id) {
-  return { id, networkId, cameraCalls: [], setCamera(options) { this.cameraCalls.push({target: options.target.clone(), zoom: options.zoom, duration: options.duration}) }, position: new THREE.Vector3(0, 0, 1.5), quaternion: new THREE.Quaternion(),
+  return { id, networkId, poseCalls: [], poseOptionsCalls: [], setPose(pose, options) { this.poseCalls.push(structuredClone(pose)); this.poseOptionsCalls.push(structuredClone(options)); this.pose = pose; return true }, cameraCalls: [], setCamera(options) { this.cameraCalls.push({...options, target: options.target?.clone(), quaternion: options.quaternion?.clone()}) }, position: new THREE.Vector3(0, 0, 1.5), quaternion: new THREE.Quaternion(),
     teleport(position, yaw) { this.position.copy(position); this.quaternion.setFromEuler(new THREE.Euler(0, yaw, 0)) } }
 }
