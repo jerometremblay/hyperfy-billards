@@ -139,6 +139,7 @@ export function harness({ instanceId = `test-app-${++nextInstanceId}`, server = 
     isClient: !server,
     getPlayers: () => players,
     getPlayer: id => (id ? players.find(p => p.id === id) : players[0]),
+    getTime: () => now / 1000,
   }
   if (cueHolders) {
     const cueEvent = 'billard:cues'

@@ -168,7 +168,9 @@ test('a shot releases aiming inputs and starts one native return with the rise',
   assert.notEqual(held, aiming)
   assert.equal(held.camera.write, true)
   assert.equal(held.scrollDelta.capture, true, 'zoom cannot expose the head before the rise finishes')
-  for (const key of ['keyW', 'keyA', 'keyS', 'keyD', 'space', 'escape'])
+  assert.equal(held.space.capture, true, 'retain Space release while movement inputs resume')
+  assert.equal(held.escape.capture, true, 'Escape can leave a held follow-through')
+  for (const key of ['keyW', 'keyA', 'keyS', 'keyD'])
     assert.notEqual(held[key].capture, true, 'normal player input is released')
   assert.equal(playHint(client), false)
   const claims = client.sent.filter(([event]) => event === 'pool:claim').length

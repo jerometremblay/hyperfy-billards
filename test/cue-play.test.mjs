@@ -101,7 +101,7 @@ test('the held cue aligns for shooter and late observer, then returns to hand af
   aiming.space.onPress()
   assert.equal(aiming.camera.write, false)
   assert.equal(client.activeControl.camera.write, true)
-  assert.notEqual(client.activeControl.space.capture, true)
+  assert.equal(client.activeControl.space.capture, true, 'Space release remains captured through follow-through')
   assert.equal(game.app.state.pool.owner, null)
   assert.equal(game.app.state.pool.shots, 0, 'strike waits for the cue to reach the white')
   for (let i = 0; i < 60; i++) {
@@ -128,7 +128,7 @@ test('aiming inputs release immediately while the camera waits for the shot and 
   aiming.space.onPress()
   assert.equal(aiming.camera.write, false)
   assert.equal(client.activeControl.camera.write, true)
-  assert.notEqual(client.activeControl.space.capture, true)
+  assert.equal(client.activeControl.space.capture, true, 'Space release remains captured through follow-through')
   assert.equal(client.created.find(n => n.name === 'ui').active, false)
 })
 test('orbiting updates the held cue in the camera frame regardless of rack update order', () => {

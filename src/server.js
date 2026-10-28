@@ -4,7 +4,7 @@ import { avatarStance } from './aim.js'
 import { CUE_EVENT, watchCues } from './cues.js'
 import { STROKE_CONTACT, STROKE_END } from './stroke.js'
 
-// Updates run only while a stroke or balls move; ownership expires on a wall-clock timer.
+// Updates run only while a stroke or balls move; a held final pose needs no server frame work.
 export function startServer(world, app, preset) {
   const sim = new Simulation(preset)
   let owner = null,
@@ -74,6 +74,11 @@ export function startServer(world, app, preset) {
     leaseUntil = Date.now() + 60_000
     scheduleLeaseExpiry()
   }
+  const strokeMoving = () => stroke && stroke.elapsed < STROKE_END
+  const releaseStroke = () => {
+    stroke.held = false
+    if (stroke.elapsed + 1e-9 >= STROKE_END) stroke = null
+  }
   const cueEvent = CUE_EVENT
   watchCues(world, next => {
     if (JSON.stringify(next) === JSON.stringify(cueHolders)) return
@@ -82,7 +87,10 @@ export function startServer(world, app, preset) {
       owner = aim = null
       leaseUntil = 0
     }
-    if (stroke && !stroke.hit && !cueHolders.includes(stroke.playerId)) stroke = null
+    if (stroke && !cueHolders.includes(stroke.playerId)) {
+      if (!stroke.hit) stroke = null
+      else releaseStroke()
+    }
     publish()
   })
   const refreshCues = () => app.emit(`${cueEvent}:request`)
@@ -103,7 +111,7 @@ export function startServer(world, app, preset) {
   }
   const update = dt => {
     if (!Number.isFinite(dt) || dt <= 0) return
-    if (!sim.moving && !stroke) {
+    if (!sim.moving && !strokeMoving()) {
       accumulator = 0
       app.off('update', update)
       updateAttached = false
@@ -111,35 +119,35 @@ export function startServer(world, app, preset) {
     }
     // A stall slows the simulation rather than producing one giant physics step.
     accumulator = Math.min(accumulator + dt, 0.25)
-    while (accumulator >= STEP && (sim.moving || stroke)) {
-      if (stroke) {
+    while (accumulator >= STEP && (sim.moving || strokeMoving())) {
+      if (strokeMoving()) {
         const player = world.getPlayer(stroke.playerId)
         if (!stroke.hit && (!nearby(player) || !cueHolders.includes(stroke.playerId))) stroke = null
         if (stroke) {
-          stroke.elapsed += STEP
+          stroke.elapsed = Math.min(STROKE_END, stroke.elapsed + STEP)
           if (!stroke.hit && stroke.elapsed + 1e-9 >= STROKE_CONTACT) {
             stroke.hit = sim.shoot(stroke)
             if (!stroke.hit) stroke = null
           }
-          if (stroke && stroke.elapsed + 1e-9 >= STROKE_END) stroke = null
+          if (stroke && !stroke.held && stroke.elapsed + 1e-9 >= STROKE_END) stroke = null
         }
       }
       if (sim.moving) sim.step()
       accumulator -= STEP
     }
     sinceSnapshot += dt
-    if (sinceSnapshot >= 0.05 || (!sim.moving && !stroke)) {
+    if (sinceSnapshot >= 0.05 || (!sim.moving && !strokeMoving())) {
       sinceSnapshot = 0
       publish()
     }
-    if (!sim.moving && !stroke) {
+    if (!sim.moving && !strokeMoving()) {
       accumulator = 0
       app.off('update', update)
       updateAttached = false
     }
   }
   const startUpdates = () => {
-    if ((sim.moving || stroke) && !updateAttached) {
+    if ((sim.moving || strokeMoving()) && !updateAttached) {
       updateAttached = true
       app.on('update', update)
     }
@@ -170,6 +178,11 @@ export function startServer(world, app, preset) {
       leaseUntil = 0
       publish()
     }
+  })
+  app.on('pool:stroke-release', (request, sender) => {
+    if (!stroke?.held || request?.id !== stroke.id || playerFor(sender)?.id !== stroke.playerId) return
+    releaseStroke()
+    publish()
   })
   app.on('pool:ping', (_, sender) => {
     expire()
@@ -211,7 +224,7 @@ export function startServer(world, app, preset) {
           moveStance(playerFor(sender), request.angle)
           stroke = { id: seq + 1, playerId: owner, angle: request.angle, speed: request.speed,
             side: request.side ?? 0, top: request.top ?? 0, ball: sim.table.cueball.pos.toArray(),
-            elapsed: 0, hit: false }
+            elapsed: 0, hit: false, held: request.hold === true }
           accepted = true
         } else if (!stroke && request.animate !== true) {
           accepted = sim.shoot(request)
@@ -239,8 +252,9 @@ export function startServer(world, app, preset) {
     })
   }
   world.on('leave', ({ playerId }) => {
-    if (stroke?.playerId === playerId && !stroke.hit) {
-      stroke = null
+    if (stroke?.playerId === playerId) {
+      if (!stroke.hit) stroke = null
+      else releaseStroke()
       publish()
     }
   })

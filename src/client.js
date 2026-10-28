@@ -30,7 +30,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   world.on(volumeEvent, value => sounds.setVolume(value))
   app.emit(`${volumeEvent}:request`)
   let poseMeasurements = null, savedCamera = null, cameraHold = null
-  let aimCameraPosition = null, aimCameraTarget = null
+  let aimCameraPosition = null, aimCameraTarget = null, strokePlayback = null, completedStrokeId = -1
   const riseDuration = 1
   let soundEvents = [], lastEventId = latest?.lastEventId || 0
   const cueEvent = CUE_EVENT
@@ -51,10 +51,12 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   let hintMode = null
   let hoverRefreshPending = false
   let updateAttached = false
+  let frameTime = world.getTime()
   let update
   const wake = () => {
     if (!update || updateAttached) return
     updateAttached = true
+    frameTime = world.getTime()
     app.on('update', update)
   }
   const isNearby = () => me.position.distanceTo(app.position) < 15
@@ -110,9 +112,16 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     poseMeasurements = null
     posedPlayer = null
   }
+  const releaseStroke = () => {
+    if (!cameraHold?.holding) return
+    cameraHold.holding = false
+    app.send('pool:stroke-release', { id: cameraHold.strokeId })
+    wake()
+  }
   const returnCamera = () => {
     if (!cameraHold || cameraHold.returnAt !== null) return
     const held = cameraHold
+    releaseStroke()
     held.returnAt = clock + riseDuration
     app.off('lateUpdate', updateCamera)
     if (held.control) {
@@ -120,14 +129,18 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       held.control.release()
       held.control = null
     }
-    me.setCamera?.({ target: held.target, zoom: 0.3, duration: riseDuration })
+    me.setCamera?.({ target: held.target, zoom: 0.3, duration: riseDuration, armsOnly: true })
     refresh()
   }
   const stop = (release = true, keepPose = false) => {
     const active = control
     control = null
     pending = false
-    if (!keepPose) clearPose()
+    if (!keepPose) {
+      if (strokePlayback) completedStrokeId = Math.max(completedStrokeId, strokePlayback.stroke.id)
+      strokePlayback = null
+      clearPose()
+    }
     if (active) { active.camera.write = false; active.release() }
     if (!cameraHold) app.off('lateUpdate', updateCamera)
     if (savedCamera) {
@@ -167,21 +180,31 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       if (latest.scratched) placeCueBall()
       else {
         const ball = latest.balls[0].p
-        cameraHold = { control: null, returnAt: null,
+        cameraHold = { control: null, returnAt: null, holding: control.space.down, strokeId: latest.seq + 1,
           position: control.camera.position.clone(),
           target: worldPosition(new Vector3(ball[0], R + ball[2], -ball[1])) }
+        // Visual playback starts on the key press; server packets never reset it.
+        strokePlayback = { local: true, elapsed: 0, shots: latest.shots,
+          stroke: { id: cameraHold.strokeId, playerId: me.id, ball: ball.slice(),
+            angle, speed, side, top, held: cameraHold.holding } }
         savedCamera = null // Return to the shoulder view as the avatar stands.
         shotPending = true
         requestedAt = clock
         shotRequestSeq = latest.seq
-        request('shoot', { angle, speed, side, top, animate: true })
-        stop(true, true)
-        // Release aiming inputs now, retaining only the camera through the stroke.
+        const hold = cameraHold.holding
+        const seq = latest.seq
+        stop(false, true)
+        // Release aiming inputs now; retain the camera and Space release through follow-through.
         cameraHold.control = app.control()
         cameraHold.control.camera.write = true
         cameraHold.control.camera.zoom = 0
         cameraHold.control.scrollDelta.capture = true
+        cameraHold.control.space.capture = true
+        cameraHold.control.space.onRelease = releaseStroke
+        cameraHold.control.escape.capture = true
+        cameraHold.control.escape.onPress = () => stop()
         writeAimCamera(cameraHold.control.camera, cameraHold.position, cameraHold.target)
+        app.send('pool:shoot', { angle, speed, side, top, animate: true, hold, seq })
         wake()
       }
     }
@@ -226,7 +249,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   app.on('pool:aim', next => { aim = next; wake() })
   watchCues(world, holders => {
     cueHolders = holders
-    if (!hasCue() && control) stop()
+    if (!hasCue() && (control || cameraHold)) stop()
     refresh()
     wake()
   })
@@ -283,13 +306,17 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   }
   update = dt => {
     if (!Number.isFinite(dt) || dt <= 0) return
-    clock += dt
+    // Visual time must not inherit the engine physics delta cap at low frame rates.
+    const now = world.getTime()
+    const visualDelta = Math.max(0, now - frameTime)
+    frameTime = now
+    clock += visualDelta
     if (hoverRefreshPending) {
       hoverRefreshPending = false
       refresh()
     }
     if (pending && clock - requestedAt > 2) stop(false)
-    if (shotPending && clock - requestedAt > 2) { shotPending = false; clearPose(); refresh() }
+    if (shotPending && clock - requestedAt > 2) { shotPending = false; stop(false); refresh() }
     const nearby = isNearby()
     if (nearby) setBallsActive(true)
     if (!nearby) { if (control) stop(); clearPose(); sounds.clear(); soundEvents = [] }
@@ -316,10 +343,28 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
           new Quaternion().setFromAxisAngle(axis.multiplyScalar(1 / rotationSpeed), rotationSpeed * Math.min(dt, 0.1)))
       })
     }
-    const strokeFrame = a?.snapshot.stroke ? a : latest?.stroke ? { at: clock, snapshot: latest } : null
-    const stroke = strokeFrame?.snapshot.stroke
-    const strokeElapsed = stroke ? Math.max(0, Math.min(STROKE_END,
-      stroke.elapsed + renderAt - strokeFrame.at)) : 0
+    const networkStroke = a?.snapshot.stroke || latest?.stroke
+    if (networkStroke && networkStroke.id > completedStrokeId &&
+        strokePlayback?.stroke.id !== networkStroke.id) {
+      strokePlayback = { local: false, shots: latest.shots,
+        elapsed: Math.max(0, networkStroke.elapsed - 0.1), stroke: networkStroke }
+    }
+    let stroke = strokePlayback?.stroke
+    let strokeElapsed = 0
+    if (strokePlayback) {
+      // Advance from real frame time, independently of packet arrival times.
+      strokePlayback.elapsed = Math.min(STROKE_END, strokePlayback.elapsed + Math.min(visualDelta, 0.1))
+      strokeElapsed = strokePlayback.elapsed
+      const held = strokePlayback.local ? cameraHold?.holding : networkStroke?.id === stroke.id && networkStroke.held
+      const cancelled = strokePlayback.local
+        ? !shotPending && latest.stroke?.id !== stroke.id
+        : !networkStroke && latest.shots === strokePlayback.shots
+      if (cancelled || (strokeElapsed >= STROKE_END && !held)) {
+        completedStrokeId = Math.max(completedStrokeId, stroke.id)
+        strokePlayback = stroke = null
+      }
+    }
+    const restingStroke = stroke && strokeElapsed >= STROKE_END
     const soundsActive = sounds.update(clock)
     if (nearby && control && (me.position.distanceTo(app.position) > 5 || !hasCue())) stop()
     if (control) {
@@ -420,7 +465,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       }
     }
     // Stop native frame dispatch once interpolation, sounds and input are idle.
-    if (!control && !cameraHold && !pending && !shotPending && !stroke && !hoverRefreshPending && !latest?.moving &&
+    if (!control && (!cameraHold || restingStroke) && !pending && !shotPending && (!stroke || restingStroke) && !hoverRefreshPending && !latest?.moving &&
         frames.length <= 1 && soundEvents.length === 0 && !soundsActive) {
       app.off('update', update)
       updateAttached = false

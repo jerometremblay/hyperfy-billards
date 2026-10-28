@@ -105,8 +105,9 @@ physical transform. The server validates aim and calculates the actual stance;
 observers receive that accepted movement and aim later. Ball positions,
 placement acceptance, collision physics and shots remain server-owned.
 The camera follows the solved eyes during the stroke. The local visual
-stance stays predicted through the stroke; standing begins once buffered playback
-finishes, so delayed packets cannot restart the pose. Native
+stance and stroke start locally on Space press. Each client advances one continuous
+stroke without resetting its clock when packets arrive. Standing begins after the
+minimum follow-through and Space release; delayed packets cannot restart the pose. Native
 head-only first-person visibility hides the local head while keeping the arms
 and body visible; other players still see the full avatar. VRMs with one eye use that eye, and those without eye bones use the head
 bone. Mouse movement orbits the ball and changes aim. Cancelling restores the
@@ -120,11 +121,14 @@ avatar's low aiming stance. There is no trajectory line.
   Up/down arrows also adjust power. Other players see the cue's pullback.
 - W/S: top/back spin. A/D: side spin. Offset is limited to 0.45 ball radii.
 - Space: start the forward stroke and release aiming inputs immediately.
+  Hold Space to stay down in the final follow-through pose; release it to rise.
+  A quick tap retains the existing minimum follow-through delay.
   The white is struck after 0.30 seconds when the cue reaches it; the grip arm
-  and cue follow through, then the avatar rises over one second. The aiming
+  and cue follow through, then the avatar rises over one second once Space is released. The aiming
   camera returns directly to the final native third-person view at its nearest
-  zoom (0.3 m), in one eased movement during that same second. The head stays
-  hidden until the return finishes. Normal movement remains available; mouse look, zoom and wall collision
+  zoom (0.3 m), in one eased movement during that same second. The torso and head stay
+  hidden locally until the return finishes, with both arms and hands visible.
+  Other players see the full rising avatar. Normal movement remains available; mouse look, zoom and wall collision
   resume with the native camera. Click Play on the table again for your next shot.
 - After a scratch: mouse or left/right arrows orbit the white ball as usual.
   WASD moves the actual white-ball mesh across the cloth relative to the view

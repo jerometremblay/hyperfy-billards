@@ -25,6 +25,9 @@ test('one native camera movement begins with the rise, without an eye-following 
         assert.equal(client.handlers.lateUpdate.length,0)
         const returned=actor.cameraCalls[1]
         assert.equal(returned.duration,1,'camera and body use the same rise duration')
+        assert.equal(returned.armsOnly,true,'the local return keeps arms and hands visible while hiding the body')
+        assert.equal(returned.delay,undefined)
+        assert.equal(returned.arc,undefined)
         // Table controls remain unavailable until this single movement finishes.
         surface.onPointerDown({button:'left'})
         assert.equal(client.sent.length,requests)
