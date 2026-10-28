@@ -1,4 +1,4 @@
-import { Simulation, STEP } from './simulation.js'
+import { Simulation, STEP, BALL_RADIUS } from './simulation.js'
 import { CUE_EVENT, watchCues } from './cues.js'
 
 // Physics runs only while balls move; ownership expires on a wall-clock timer.
@@ -117,7 +117,9 @@ export function startServer(world, app, preset) {
     const player = playerFor(sender)
     if (!sim.moving && nearby(player) && cueHolders.includes(player.id) && (!owner || owner === player.id)) {
       owner = player.id
-      aim = { playerId: owner, angle: validAim(request) ? request.angle : 0, side: 0, top: 0 }
+      aim = { playerId: owner, angle: validAim(request) ? request.angle : 0, side: 0, top: 0,
+        placement: sim.scratched ? { x: -sim.size.length / 4, y: 0 } : null }
+      lastAimAt = -Infinity
       renewLease()
       publish()
     }
@@ -138,6 +140,10 @@ export function startServer(world, app, preset) {
     expire()
     const now = Date.now()
     if (!authorized(sender) || sim.moving || !validAim(request) || now - lastAimAt < 50) return
+    const placement = sim.scratched ? request.placement : null
+    if (sim.scratched && (!placement || ![placement.x, placement.y].every(Number.isFinite) ||
+        Math.abs(placement.x) > sim.size.length / 2 - 2 * BALL_RADIUS ||
+        Math.abs(placement.y) > sim.size.width / 2 - 2 * BALL_RADIUS)) return
     lastAimAt = now
     aim = {
       playerId: owner,
@@ -145,6 +151,7 @@ export function startServer(world, app, preset) {
       side: request.side ?? 0,
       top: request.top ?? 0,
       speed: request.speed ?? 2.5,
+      placement: placement ? { x: placement.x, y: placement.y } : null,
     }
     app.state.aim = aim
     // Aim packets must not invalidate the sequence used by a following shot.
@@ -169,6 +176,7 @@ export function startServer(world, app, preset) {
         accepted = true
       }
       if (accepted) {
+        if (aim) aim.placement = null
         publish()
         startUpdates()
       }

@@ -1480,7 +1480,14 @@
       const player = playerFor(sender);
       if (!sim.moving && nearby(player) && cueHolders.includes(player.id) && (!owner || owner === player.id)) {
         owner = player.id;
-        aim = { playerId: owner, angle: validAim(request) ? request.angle : 0, side: 0, top: 0 };
+        aim = {
+          playerId: owner,
+          angle: validAim(request) ? request.angle : 0,
+          side: 0,
+          top: 0,
+          placement: sim.scratched ? { x: -sim.size.length / 4, y: 0 } : null
+        };
+        lastAimAt = -Infinity;
         renewLease();
         publish();
       }
@@ -1501,13 +1508,16 @@
       expire();
       const now = Date.now();
       if (!authorized(sender) || sim.moving || !validAim(request) || now - lastAimAt < 50) return;
+      const placement = sim.scratched ? request.placement : null;
+      if (sim.scratched && (!placement || ![placement.x, placement.y].every(Number.isFinite) || Math.abs(placement.x) > sim.size.length / 2 - 2 * BALL_RADIUS || Math.abs(placement.y) > sim.size.width / 2 - 2 * BALL_RADIUS)) return;
       lastAimAt = now;
       aim = {
         playerId: owner,
         angle: request.angle,
         side: request.side ?? 0,
         top: request.top ?? 0,
-        speed: request.speed ?? 2.5
+        speed: request.speed ?? 2.5,
+        placement: placement ? { x: placement.x, y: placement.y } : null
       };
       app2.state.aim = aim;
       app2.send("pool:aim", aim);
@@ -1530,6 +1540,7 @@
           accepted = true;
         }
         if (accepted) {
+          if (aim) aim.placement = null;
           publish();
           startUpdates();
         }
@@ -1952,13 +1963,23 @@
         sinceAim += dt;
         if (sinceAim >= 0.1) {
           sinceAim = 0;
-          app2.send("pool:aim", { angle, side, top, speed });
+          app2.send("pool:aim", {
+            angle,
+            side,
+            top,
+            speed,
+            placement: latest?.scratched ? { x: placeX, y: placeY } : null
+          });
         }
         ghost.active = false;
         text.value = latest?.error || (latest?.scratched ? "Scratch \xB7 Mouse / \u2190 \u2192: orbit \xB7 WASD: move white ball\nClick / Space: confirm \xB7 R: re-rack \xB7 Esc: leave" : `Mouse: orbit / aim \xB7 Scroll back / closer: Power ${speed.toFixed(1)} m/s \xB7 W/S Top ${top.toFixed(2)} \xB7 A/D Side ${side.toFixed(2)}
 Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
       }
       const shooter = latest?.owner;
+      if (nearby && shooter && shooter !== me.id && latest.scratched && !latest.moving && aim?.playerId === shooter && aim.placement) {
+        balls[0].active = true;
+        balls[0].position.set(aim.placement.x, BALL_RADIUS, -aim.placement.y);
+      }
       const aiming = shooter && !latest.moving && !latest.scratched && (shooter === me.id ? !!control : aim?.playerId === shooter);
       if (aiming && latest.balls[0]) {
         const params = shooter === me.id ? { angle, side, top, speed } : aim;

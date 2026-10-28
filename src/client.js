@@ -292,7 +292,11 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         }
       }
       sinceAim += dt
-      if (sinceAim >= 0.1) { sinceAim = 0; app.send('pool:aim', { angle, side, top, speed }) }
+      if (sinceAim >= 0.1) {
+        sinceAim = 0
+        app.send('pool:aim', { angle, side, top, speed,
+          placement: latest?.scratched ? { x: placeX, y: placeY } : null })
+      }
       ghost.active = false
       text.value = latest?.error || (latest?.scratched
         ? 'Scratch · Mouse / ← →: orbit · WASD: move white ball\nClick / Space: confirm · R: re-rack · Esc: leave'
@@ -300,6 +304,11 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     }
     // Move the actual cue from the existing rack, visible to every observer.
     const shooter = latest?.owner
+    if (nearby && shooter && shooter !== me.id && latest.scratched && !latest.moving &&
+        aim?.playerId === shooter && aim.placement) {
+      balls[0].active = true
+      balls[0].position.set(aim.placement.x, R, -aim.placement.y)
+    }
     const aiming = shooter && !latest.moving && !latest.scratched &&
       (shooter === me.id ? !!control : aim?.playerId === shooter)
     if (aiming && latest.balls[0]) {
