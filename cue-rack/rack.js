@@ -23,6 +23,31 @@ const HOLD_TILT = -Math.PI * 0.44
 const CUE_EVENT = 'billard:cues'
 const POSE_EVENT = 'billard:cue-pose'
 const aimPoses = new Map()
+const carryPoses = new Set()
+const carryTransitions = new Map()
+// Close only the fingers; the native idle/walk clips still move the wrist and arm.
+const carryBones = {}
+for (const [finger, angles] of Object.entries({
+  Index: [0.62, 1.163125, 0.905],
+  Middle: [0.94, 0.845125, 1.115875],
+  Ring: [0.56, 1.046875, 1.071],
+  Little: [0.24, 1.11275, 0.625],
+})) {
+  for (const [i, segment] of ['Proximal', 'Intermediate', 'Distal'].entries()) {
+    carryBones['right' + finger + segment] = {
+      rotation: new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), -angles[i]).toArray(),
+    }
+  }
+}
+// Opposition comes from the thumb base; the two phalanges only flex.
+carryBones.rightThumbMetacarpal = {
+  rotation: new Quaternion().setFromEuler(new Euler(-0.57, 0.075, 0.28, 'XYZ')).toArray(),
+}
+for (const [segment, angle] of [['Proximal', 0.035], ['Distal', 0.13]]) {
+  carryBones['rightThumb' + segment] = {
+    rotation: new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), angle).toArray(),
+  }
+}
 app.resetOnMove = false
 
 function piece(parent, type, size, position, color, extra = {}) {
@@ -163,7 +188,45 @@ function updateHeldCues() {
       }
       continue
     }
-    const handMatrix = player.getBoneTransform?.('rightHand')
+    const handMatrix = player.getBoneTransform?.('rightHand')?.clone()
+    const middleMatrix = player.getBoneTransform?.('rightMiddleProximal')?.clone()
+    const indexMatrix = player.getBoneTransform?.('rightIndexProximal')?.clone()
+    const littleMatrix = player.getBoneTransform?.('rightLittleProximal')?.clone()
+    const wrist = handMatrix ? new Vector3().setFromMatrixPosition(handMatrix) : null
+    const middle = middleMatrix ? new Vector3().setFromMatrixPosition(middleMatrix) : null
+    const palmLength = wrist && middle ? wrist.distanceTo(middle) : 0.08
+    const id = holders[i]
+    if (!carryPoses.has(id)) {
+      if (player.setPose?.({ bones: carryBones })) carryPoses.add(id)
+    }
+    if (wrist && middle && indexMatrix && littleMatrix) {
+      const forward = middle.clone().sub(wrist)
+      const direction = new Vector3().setFromMatrixPosition(indexMatrix)
+        .sub(new Vector3().setFromMatrixPosition(littleMatrix)).normalize()
+      const palm = forward.normalize().cross(direction).normalize().negate()
+      // Place the shaft below the knuckles in the closed finger/thumb groove.
+      // Measuring the actual palm keeps both small and large avatars fitted.
+      const grip = middle.addScaledVector(palm, 0.035 * palmLength / 0.091586)
+      // Keep the cue's roll relative to the wrist, including when it points down.
+      const handRotation = new Quaternion().setFromRotationMatrix(handMatrix)
+      const shaftLocal = direction.clone().applyQuaternion(handRotation.clone().invert())
+      cues[i].quaternion.copy(handRotation)
+        .multiply(new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), shaftLocal))
+      cues[i].position.copy(grip).addScaledVector(direction, 0.38)
+      const transition = carryTransitions.get(id)
+      if (transition) {
+        const t = Math.min(1, Math.max(0, world.getTime() - transition.startedAt))
+        if (t === 1) carryTransitions.delete(id)
+        else {
+          const blend = t * t * (3 - 2 * t)
+          // Blend the attachment in wrist space while the wrist and body rise.
+          cues[i].position.copy(transition.position.clone().applyMatrix4(handMatrix)
+            .lerp(cues[i].position, blend))
+          cues[i].quaternion.copy(handRotation.multiply(transition.quaternion).slerp(cues[i].quaternion, blend))
+        }
+      }
+      continue
+    }
     const bodyQuat = player.quaternion
     const tilt = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), HOLD_TILT)
     const cueQuat = bodyQuat.clone().multiply(tilt)
@@ -201,6 +264,11 @@ function applyHolders(next) {
     }
   }
   for (const id of aimPoses.keys()) if (!holders.includes(id)) aimPoses.delete(id)
+  for (const id of carryTransitions.keys()) if (!holders.includes(id)) carryTransitions.delete(id)
+  for (const id of carryPoses) if (!holders.includes(id)) {
+    world.getPlayer(id)?.setPose?.(null)
+    carryPoses.delete(id)
+  }
   publishHolders()
   if (!world.isClient || typeof world.getPlayer !== 'function') return
   if (holders.some(Boolean)) app.on('lateUpdate', updateHeldCues)
@@ -301,12 +369,32 @@ if (world.isClient && typeof world.getPlayer === 'function') {
   world.on(POSE_EVENT, pose => {
     if (!pose || !holders.includes(pose.playerId)) return
     if (pose.clear) {
-      if (aimPoses.get(pose.playerId)?.tableId === pose.tableId) aimPoses.delete(pose.playerId)
+      if (aimPoses.get(pose.playerId)?.tableId === pose.tableId) {
+        aimPoses.delete(pose.playerId)
+        const player = world.getPlayer(pose.playerId)
+        const handInverse = player?.getBoneTransform?.('rightHand')?.clone().invert()
+        const cue = cues[holders.indexOf(pose.playerId)]
+        if (handInverse && player.getBoneTransform?.('rightIndexProximal')) {
+          carryTransitions.set(pose.playerId, {
+            startedAt: world.getTime(),
+            position: cue.position.clone().applyMatrix4(handInverse),
+            quaternion: new Quaternion().setFromRotationMatrix(handInverse).multiply(cue.quaternion),
+          })
+        }
+        // Blend directly into the carrying fingers as the native body rises.
+        // Owning this target also prevents the table's subsequent release from
+        // replacing it with an open hand.
+        if (player?.setPose?.({ bones: carryBones }, { duration: 1 })) {
+          carryPoses.add(pose.playerId)
+        }
+      }
       return
     }
     if (Array.isArray(pose.position) && pose.position.length === 3 && pose.position.every(Number.isFinite) &&
         Array.isArray(pose.quaternion) && pose.quaternion.length === 4 && pose.quaternion.every(Number.isFinite)) {
       aimPoses.set(pose.playerId, pose)
+      carryPoses.delete(pose.playerId)
+      carryTransitions.delete(pose.playerId)
       // Apply current input immediately, then read the finished avatar animation
       // again in lateUpdate so rack/table update order cannot leave the cue behind.
       updateHeldCues()
@@ -320,6 +408,9 @@ if (world.isClient && typeof world.getPlayer === 'function') {
   app.on('destroy', () => {
     app.off('lateUpdate', updateHeldCues)
     if (localControls) localControls.release()
+    for (const id of carryPoses) world.getPlayer(id)?.setPose?.(null)
+    carryPoses.clear()
+    carryTransitions.clear()
     holders.fill(null)
     app.emit(CUE_EVENT, { rackId: app.instanceId, holders: [] })
     for (let i = 0; i < 4; i++) if (attached[i]) world.remove(cues[i])

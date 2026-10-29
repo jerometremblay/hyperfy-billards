@@ -154,12 +154,16 @@ export function playerAimPose(player, cuePosition, cueQuaternion, contactPositio
         .multiply(new Quaternion().setFromAxisAngle(X, -angles[i])).toArray()
     }
   }
-  // Bring the thumb down to the shaft, with its last segment pointing at the ball.
-  for (const [segment, angle] of [
-    ['Metacarpal', 0.45125], ['Proximal', 1.450], ['Distal', Math.PI / 2],
+  // The grip photos show the thumb hanging beside the fingers, not along the cue.
+  const thumbScale = Math.max(0, Math.min(1,
+    ((measurements.palmLength ?? 0.091586 * height / 1.8256) - 0.07066) / (0.091586 - 0.07066)))
+  for (const [segment, angle, spread] of [
+    ['Metacarpal', 0.45125 + 1.05 * thumbScale, 1],
+    ['Proximal', 0.15 + 0.5 * thumbScale, Math.PI / 2],
+    ['Distal', 0, 0],
   ]) {
     gripFingers['Thumb' + segment] = gripRotation.clone()
-      .multiply(new Quaternion().setFromAxisAngle(Z, segment === 'Distal' ? 0 : 0.400))
+      .multiply(new Quaternion().setFromAxisAngle(Z, spread))
       .multiply(new Quaternion().setFromAxisAngle(Y, angle)).toArray()
   }
   const bridgeRotation = inverse.clone().multiply(

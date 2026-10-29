@@ -98,6 +98,12 @@ The server checks actual rack
 ownership before granting controls and again on each shot/place/reset. Pickup
 and return identify players from the transport sender.
 
+While standing or walking, the cue sits inside the curled fingers, with the
+thumb closing from the opposite, wrist side of the shaft. This finger-only pose
+leaves the native arm and wrist animation intact and yields to the aiming pose.
+After a shot, the fingers blend directly from the shooting grip into the carrying
+grip during the same one-second body rise, without passing through an open hand.
+
 Entering aim blends the standing body, arms and fingers into the shooting stance
 over one second, with the same easing as the rise after a shot. The camera takes one straight path
 from the exact view visible when Play is clicked to the fully lowered right eye,
@@ -183,7 +189,8 @@ for deeper shots, keeping it outside the torso throughout follow-through. Wider
 avatars gain a small sideways body offset, with the planted bridge adjusted to
 remain reachable. The grip
 uses native articulated hand poses: curved fingers surround the actual shaft
-and the thumb points toward the ball. For deep shots the height-adjusted grip
+and the thumb hangs down beside the index and middle fingers. Its opposition
+adapts to palm size, keeping the thumb pad beside the shaft throughout the stroke. For deep shots the height-adjusted grip
 moves farther back, leaving at least 13.5 cm of shaft behind the hand. The body
 advances gradually to preserve reach during the strongest backswing. Native IK
 retains each avatar's real arm lengths. Power pulls the cue back
@@ -203,7 +210,9 @@ The movement is based on [WPBSA coaching basics](https://wpbsa.com/wp-content/up
 Hand placement also follows [Samm Diep's open-bridge reference photographs](https://www.pooldawg.com/article/the-bridge-to-victory/)
 (spread fingers and raised thumb against the index) and
 [Florian Kohler and Valerie Bedard's grip photographs](https://www.pooldawg.com/article/advanced-fundamentals/)
-(a loose rear grip, straight wrist and fingers curled under the cue). These are
+(a loose rear grip, straight wrist and fingers curled under the cue).
+[Jacob Parrent's grip close-ups](https://www.worldofpoolandbilliards.com/post/how-to-grip-a-pool-cue)
+show the downward thumb closing against the index and middle fingers. These are
 pose references; the photos are not included as game assets.
 The same aiming and stroke code is rendered by every nearby client; body poses
 are not sent as per-bone network packets. Clients without this fork's `setPose`

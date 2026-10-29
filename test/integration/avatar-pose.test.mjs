@@ -67,6 +67,21 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
     const worldRotation = name => new THREE.Quaternion().setFromRotationMatrix(instance.getBoneTransform(name))
     const thumbAxis = worldBone('rightThumbDistal').sub(worldBone('rightThumbProximal')).normalize()
       .applyQuaternion(worldRotation('rightThumbDistal').invert())
+    const thumbVertices = []
+    const thumbName = glb.userData.vrm.humanoid.getRawBoneNode('rightThumbDistal').name
+    instance.raw.scene.traverse(mesh => {
+      if (!mesh.isSkinnedMesh) return
+      const indices = mesh.geometry.attributes.skinIndex, weights = mesh.geometry.attributes.skinWeight
+      for (let i = 0; i < indices.count; i++) {
+        let strongest = 0, name
+        for (let k = 0; k < weights.itemSize; k++) if (weights.getComponent(i, k) > strongest) {
+          strongest = weights.getComponent(i, k)
+          name = mesh.skeleton.bones[indices.getComponent(i, k)].name
+        }
+        if (name === thumbName) thumbVertices.push({ mesh, i })
+      }
+    })
+    assert.ok(thumbVertices.length > 0, 'real aiming thumb skin is included')
     for (const speed of [0.1, 2.5, 5]) {
       const shot = physics.shotPose(ball, angle, 0, 0, undefined, speed)
       const worldPoint = point => point.clone().sub(stance.position)
@@ -102,8 +117,21 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
         // without moving the hand off the cue or stretching either arm bone.
         assert.ok(elbow.y - wrist.y > .05, 'elbow stays raised throughout follow-through')
         const thumb = thumbAxis.clone().applyQuaternion(worldRotation('rightThumbDistal'))
-        assert.ok(thumb.dot(new THREE.Vector3(0, 1, 0).applyQuaternion(cueQuaternion)) > 0.999,
-          'native thumb points along the cue toward the ball')
+        const cueDirection = new THREE.Vector3(0, 1, 0).applyQuaternion(cueQuaternion)
+        const thumbDown = new THREE.Vector3(0, -1, 0)
+          .addScaledVector(cueDirection, cueDirection.y).normalize()
+        assert.ok(thumb.dot(thumbDown) > .9,
+          'native aiming thumb hangs down beside the fingers, as in the grip reference photos')
+        scene.updateMatrixWorld(true)
+        let thumbClearance = Infinity
+        for (const { mesh, i } of thumbVertices) {
+          const point = new THREE.Vector3().fromBufferAttribute(mesh.geometry.attributes.position, i)
+          mesh.applyBoneTransform(i, point).applyMatrix4(mesh.matrixWorld).sub(worldPoint(cue.cuePosition))
+          point.addScaledVector(cueDirection, -point.dot(cueDirection))
+          thumbClearance = Math.min(thumbClearance, point.length())
+        }
+        assert.ok(thumbClearance >= .0115, `aiming thumb clears the physical shaft: ${thumbClearance}`)
+        assert.ok(thumbClearance <= .019, `aiming thumb stays beside the shaft and index finger: ${thumbClearance}`)
       }
     }
     // Test the skinned hand, not just a wrist target: the old open bridge

@@ -1890,12 +1890,16 @@
         gripFingers[finger + segment] = gripRotation.clone().multiply(new Q().setFromAxisAngle(X, -angles[i])).toArray();
       }
     }
-    for (const [segment, angle] of [
-      ["Metacarpal", 0.45125],
-      ["Proximal", 1.45],
-      ["Distal", Math.PI / 2]
+    const thumbScale = Math.max(0, Math.min(
+      1,
+      ((measurements.palmLength ?? 0.091586 * height / 1.8256) - 0.07066) / (0.091586 - 0.07066)
+    ));
+    for (const [segment, angle, spread] of [
+      ["Metacarpal", 0.45125 + 1.05 * thumbScale, 1],
+      ["Proximal", 0.15 + 0.5 * thumbScale, Math.PI / 2],
+      ["Distal", 0, 0]
     ]) {
-      gripFingers["Thumb" + segment] = gripRotation.clone().multiply(new Q().setFromAxisAngle(Z, segment === "Distal" ? 0 : 0.4)).multiply(new Q().setFromAxisAngle(Y, angle)).toArray();
+      gripFingers["Thumb" + segment] = gripRotation.clone().multiply(new Q().setFromAxisAngle(Z, spread)).multiply(new Q().setFromAxisAngle(Y, angle)).toArray();
     }
     const bridgeRotation = inverse.clone().multiply(
       new Q().setFromUnitVectors(FORWARD, alongCue)
