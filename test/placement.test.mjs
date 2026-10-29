@@ -16,6 +16,7 @@ function setup() {
   client.created.find(n => n.name === 'prim' && n.opacity === 0).onPointerDown({ button: 'left' })
   client.emit('pool:snapshot', { ...state, seq: 3, owner: 'alice' })
   client.emit('update', 0.06)
+  client.emit('update', 1) // Finish the camera entry before testing placement orbit.
   return { client, control: client.control, state, players,
     white: client.created.filter(n => n.name === 'group')[0] }
 }

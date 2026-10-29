@@ -59,6 +59,7 @@ test('accepted shot and old server movement retain the final locally predicted s
   actor.quaternion.copy(authority.quaternion)
   for (const [event, data] of packets.splice(0)) client.emit(event, data)
   client.emit('update', 1 / 60)
+  client.emit('update', 1) // Exercise the shot handoff from settled aiming.
   const control = client.control
   control.arrowRight.down = true
   for (let i = 0; i < 30; i++) client.emit('update', 1 / 60)

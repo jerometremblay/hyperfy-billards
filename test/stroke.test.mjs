@@ -79,8 +79,44 @@ test('the tip reaches the ball at contact, while the bridge and body stay still 
     })
     for (const pose of poses.slice(1)) {
       assert.deepEqual(pose.bones, poses[0].bones)
-      assert.deepEqual(pose.hands.left, poses[0].hands.left)
+      assert.ok(new THREE.Vector3(...pose.hands.left.p).distanceTo(new THREE.Vector3(...poses[0].hands.left.p)) < 1e-9)
+      assert.deepEqual({ ...pose.hands.left, p: [] }, { ...poses[0].hands.left, p: [] })
       assert.ok(new THREE.Vector3(...pose.hands.right.p).distanceTo(new THREE.Vector3(...poses[0].hands.right.p)) > 0.01)
+    }
+  }
+})
+
+test('every shot begins with a brief backswing before advancing to the ball', () => {
+  for (const speed of [0.1, 0.5, 1, 2.5, 5]) {
+    const stroke = { ball: [0, 0, 0], angle: 0.7, side: 0, top: 0, speed }
+    const start = physics.strokePose(stroke, 0)
+    const progress = time => physics.strokePose(stroke, time).cuePosition
+      .sub(start.cuePosition).dot(start.cueDirection)
+    assert.ok(progress(.05) < -.001, 'cue moves back as soon as the stroke starts')
+    assert.ok(progress(.10) < progress(.05), 'short backswing finishes before the hit')
+    assert.ok(progress(.20) > progress(.10), 'cue reverses toward the ball')
+    assert.ok(progress(physics.STROKE_CONTACT) > 0, 'cue reaches contact ahead of its aiming position')
+  }
+})
+
+test('cue speed at impact matches the real physics launch speed and stays continuous after contact', () => {
+  for (const speed of [0.1, 0.5, 1, 2.5, 5]) {
+    for (const [side, top] of [[0, 0], [.45, 0], [0, -.45], [.30, .30]]) {
+      const sim = new physics.Simulation('8')
+      const stroke = { ball: sim.table.cueball.pos.toArray(), angle: 0.7, side, top, speed }
+      assert.equal(sim.shoot(stroke), true)
+      const actual = sim.table.cueball.vel.length()
+      const contact = physics.strokePose(stroke, physics.STROKE_CONTACT)
+      const epsilon = 1e-6
+      const before = physics.strokePose(stroke, physics.STROKE_CONTACT - epsilon)
+      const after = physics.strokePose(stroke, physics.STROKE_CONTACT + epsilon)
+      const incoming = contact.cuePosition.clone().sub(before.cuePosition).dot(contact.cueDirection) / epsilon
+      const outgoing = after.cuePosition.clone().sub(contact.cuePosition).dot(contact.cueDirection) / epsilon
+      assert.ok(Math.abs(incoming - actual) < .001, `${speed} m/s: incoming cue ${incoming}, ball ${actual}`)
+      assert.ok(Math.abs(outgoing - actual) < .001, `${speed} m/s: outgoing cue ${outgoing}, ball ${actual}`)
+      const held = physics.strokePose(stroke, physics.STROKE_END)
+      assert.ok(held.cuePosition.distanceTo(physics.strokePose(stroke, physics.STROKE_END + 3).cuePosition) < 1e-9,
+        'follow-through stops before the existing hold and rise')
     }
   }
 })

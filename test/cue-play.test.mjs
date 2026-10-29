@@ -141,6 +141,8 @@ test('orbiting updates the held cue in the camera frame regardless of rack updat
     game.app.deliver = (event, body) => client.emit(event, body)
     client.app.deliver = (event, body) => game.emit(event, body, 'socket-a')
     client.created.find(n => n.name === 'prim' && n.opacity === 0).onPointerDown({ button: 'left' })
+    client.emit('update', 1 / 60)
+    client.emit('update', 1) // Finish entry before checking steady orbit alignment.
     const cue = clientRack.created.find(n => n.name === 'group')
     const control = client.control
     let angle = game.app.state.aim.angle

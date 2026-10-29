@@ -53,6 +53,7 @@ test('mouse movement orbits the ball, changes shot direction and moves the avata
   client.app.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.7)
   clickPlay(client)
   client.emit('update', 0.06)
+  client.emit('update', 1) // Finish entry before testing the steady eye camera.
   const active = client.control
   const position = active.camera.position.clone(), avatar = players[0].position.clone()
   const ball = worldBall(client, server.app.state.pool.balls[0].p)
@@ -117,6 +118,7 @@ test('scroll pulls the cue back for more power, pushes it closer for less, and s
   client.world.on('billard:cue-pose', pose => { if (!pose.clear) cuePose = pose })
   clickPlay(client)
   client.emit('update', 1 / 60)
+  client.emit('update', 1) // Finish entry before testing the steady eye camera.
   const control = client.control
   assert.equal(control.scrollDelta.capture, true)
   const camera = control.camera.position.clone()
@@ -296,41 +298,51 @@ test('aiming hides the local head with native first-person visibility and restor
 })
 
 
-test('aim and held shot cameras follow the eye midpoint using scratch bone matrices', () => {
+test('aim and held shot cameras use the right eye instead of the midpoint through the stroke', () => {
   const { client, server, players } = setup()
   clickPlay(client)
   client.emit('update', 0.06)
+  client.emit('update', 1) // Finish entry before testing the steady eye camera.
   const aiming = client.control
   const target = worldBall(client, server.app.state.pool.balls[0].p)
   const centre = aiming.camera.position.clone()
+  const rightEye = centre.clone().add(new THREE.Vector3(.035, 0, 0))
   const scratch = new THREE.Matrix4()
   players[0].getBoneTransform = bone => {
     if (bone === 'leftEye') return scratch.makeTranslation(centre.x - 0.035, centre.y, centre.z)
-    if (bone === 'rightEye') return scratch.makeTranslation(centre.x + 0.035, centre.y, centre.z)
+    if (bone === 'rightEye') return scratch.makeTranslation(...rightEye.toArray())
     return null
   }
   client.emit('update', 0.01)
-  assert.ok(aiming.camera.position.distanceTo(centre) < 1e-8)
+  assert.ok(aiming.camera.position.distanceTo(rightEye) < 1e-8)
   aimedAt(aiming.camera, target)
   aiming.space.onPress()
   const held = client.activeControl
-  centre.y += 0.45
+  rightEye.y += 0.45
+  centre.y -= 0.2 // The left eye must not pull the shot camera toward the midpoint.
   client.emit('update', 0.01)
-  assert.ok(held.camera.position.distanceTo(centre) < 1e-8, 'the camera follows the eyes during the stroke')
+  assert.ok(held.camera.position.distanceTo(rightEye) < 1e-8, 'the camera follows only the right eye during the stroke')
   aimedAt(held.camera, target)
   assert.equal(players[0].cameraCalls.length, 1, 'the head remains hidden until the native camera returns')
   client.emit('destroy')
   assert.equal(client.activeControl, null)
 })
 
-test('the eye camera supports one eye or a head bone when a VRM has no eye bones', () => {
-  for (const bone of ['leftEye', 'rightEye', 'head']) {
+test('right-eye camera estimates missing right eyes from a left eye or head, scaled to avatar height', () => {
+  for (const bone of ['leftEye', 'rightEye', 'head']) for (const height of [1.2, 1.8256]) {
     const { client, players } = setup()
     const position = new THREE.Vector3(0.2, 1.1, 0.6)
+    players[0].height = height
     players[0].getBoneTransform = name => name === bone ? new THREE.Matrix4().makeTranslation(...position.toArray()) : null
     clickPlay(client)
     client.emit('update', 0.06)
-    assert.ok(client.control.camera.position.distanceTo(position) < 1e-8)
+    client.emit('update', 1) // Finish entry before testing the steady eye camera.
+    const ball = worldBall(client, client.app.state.pool.balls[0].p)
+    const expected = position.clone()
+    if (bone !== 'rightEye') expected.addScaledVector(ball.clone().sub(position)
+      .cross(new THREE.Vector3(0, 1, 0)).normalize(), (bone === 'leftEye' ? .06 : .03) * height / 1.7)
+    assert.ok(client.control.camera.position.distanceTo(expected) < 1e-8)
+    aimedAt(client.control.camera, ball)
     client.emit('destroy')
   }
 })
@@ -352,6 +364,7 @@ test('the eye camera reads the solved pose in lateUpdate after an orbit turn', (
   const { client, server, players } = setup()
   clickPlay(client)
   client.emit('update', 0.06)
+  client.emit('update', 1) // Finish entry before testing the steady eye camera.
   const aiming = client.control
   const target = worldBall(client, server.app.state.pool.balls[0].p)
   const eyes = aiming.camera.position.clone()

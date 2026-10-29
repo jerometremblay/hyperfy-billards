@@ -65,17 +65,23 @@ test('Space starts the local stroke immediately and network jitter cannot retime
   }
 })
 
-test('observer stroke never rewinds or jumps when increasing packet delays are followed by a burst',()=>{
+test('observer stroke has one backswing and forward stroke without packet rewinds or jumps',()=>{
   for(const fps of [30,60,144]){
     const s=replay(fps,[0,.22,.24,.26,.28,.30])
     const direction=s.samples.at(-1).observer.clone().sub(s.start).normalize()
-    let previous=0
+    const request=s.local.sent.find(([name])=>name==='pool:shoot')[1]
+    const maxSpeed=request.speed*(1-.25*((request.side??0)**2+(request.top??0)**2))
+    let previous=0, advancing=false, sawBackswing=false
     for(const frame of s.samples){
       const progress=frame.observer.clone().sub(s.start).dot(direction)
-      assert.ok(progress>=previous-1e-8,`observer stroke rewound by ${previous-progress}m`)
-      assert.ok(progress-previous<.045*30/fps,`observer stroke jumped ${(progress-previous)*100}cm in one frame`)
+      if(progress<previous-1e-8)sawBackswing=true
+      if(advancing)assert.ok(progress>=previous-1e-8,`packet rewound the forward stroke by ${previous-progress}m`)
+      if(progress>previous+1e-8)advancing=true
+      assert.ok(Math.abs(progress-previous)<=maxSpeed/fps+1e-6,
+        `observer stroke exceeded its physical speed: ${(progress-previous)*100}cm in one frame`)
       previous=progress
     }
+    assert.equal(sawBackswing,true,'observer sees the brief backswing')
     s.release();s.advance(1.5)
     assert.equal(s.remote.pose,null)
   }

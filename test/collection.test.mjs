@@ -41,6 +41,7 @@ test('adding one pool table includes the simulator, cloth-height balls, sounds a
   assert.equal(white.position.x, -physics.dimensions('8').length / 4)
   client.created.find(n => n.name === 'prim' && n.opacity === 0 && typeof n.onPointerDown === 'function').onPointerDown({ button: 'left' })
   client.emit('update', 0.06)
+  client.emit('update', 1) // Finish lowering before inspecting the low eye view.
   const active = client.control
   assert.ok(active.camera.write)
   const ballWorldY = client.app.position.y + root.position.y + white.position.y

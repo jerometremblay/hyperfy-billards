@@ -41,8 +41,8 @@ export function shotPose(position, angle, side = 0, top = 0, elevation = AIM_ELE
   const contact = ball.clone().addScaledVector(across, side * R)
   contact.y += top * R
   // A 1.47 m cue, positive local Y toward the chalk tip.
-  // The grip arm can comfortably cover this 16 cm power range.
-  const pullback = Math.max(0, Math.min(1, (speed - 0.1) / 4.9)) * 0.16
+  // Reserve 2 cm for the backswing within the grip arm's 16 cm travel.
+  const pullback = Math.max(0, Math.min(1, (speed - 0.1) / 4.9)) * 0.14
   const gap = R * Math.sqrt(Math.max(0, 1 - side * side - top * top)) + 0.012 + pullback
   const cuePosition = contact.clone().addScaledVector(cueDirection, -(0.735 + gap))
   const cueQuaternion = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), cueDirection)

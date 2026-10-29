@@ -152,6 +152,15 @@ function updateHeldCues() {
     if (pose) {
       cues[i].position.fromArray(pose.position)
       cues[i].quaternion.fromArray(pose.quaternion)
+      // Attach the aiming grip to the rendered wrist while the body lowers.
+      // The destination wrist preserves the exact hand-to-cue fit when entry ends.
+      const handDelta = player.getBoneTransform?.('rightHand', { targetPose: true })?.clone().invert()
+      const hand = player.getBoneTransform?.('rightHand')
+      if (handDelta && hand) {
+        handDelta.premultiply(hand)
+        cues[i].position.applyMatrix4(handDelta)
+        cues[i].quaternion.premultiply(new Quaternion().setFromRotationMatrix(handDelta))
+      }
       continue
     }
     const handMatrix = player.getBoneTransform?.('rightHand')
@@ -194,8 +203,8 @@ function applyHolders(next) {
   for (const id of aimPoses.keys()) if (!holders.includes(id)) aimPoses.delete(id)
   publishHolders()
   if (!world.isClient || typeof world.getPlayer !== 'function') return
-  if (holders.some(Boolean)) app.on('update', updateHeldCues)
-  else app.off('update', updateHeldCues)
+  if (holders.some(Boolean)) app.on('lateUpdate', updateHeldCues)
+  else app.off('lateUpdate', updateHeldCues)
   const me = world.getPlayer()
   const nextHeld = me ? holders.findIndex(id => id === me.id) : -1
   if (nextHeld === localHeld) return
@@ -298,13 +307,9 @@ if (world.isClient && typeof world.getPlayer === 'function') {
     if (Array.isArray(pose.position) && pose.position.length === 3 && pose.position.every(Number.isFinite) &&
         Array.isArray(pose.quaternion) && pose.quaternion.length === 4 && pose.quaternion.every(Number.isFinite)) {
       aimPoses.set(pose.playerId, pose)
-      // The table moves its camera in update; apply its cue pose in that same
-      // frame even when this rack's update has already run.
-      const slot = holders.indexOf(pose.playerId)
-      if (attached[slot]) {
-        cues[slot].position.fromArray(pose.position)
-        cues[slot].quaternion.fromArray(pose.quaternion)
-      }
+      // Apply current input immediately, then read the finished avatar animation
+      // again in lateUpdate so rack/table update order cannot leave the cue behind.
+      updateHeldCues()
     }
   })
   app.on('cue-holders', next => applyHolders(next))
@@ -313,7 +318,7 @@ if (world.isClient && typeof world.getPlayer === 'function') {
   app.emit(`${CUE_EVENT}:request`)
 
   app.on('destroy', () => {
-    app.off('update', updateHeldCues)
+    app.off('lateUpdate', updateHeldCues)
     if (localControls) localControls.release()
     holders.fill(null)
     app.emit(CUE_EVENT, { rackId: app.instanceId, holders: [] })

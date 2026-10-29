@@ -49,6 +49,7 @@ test('playing-surface click with a held cue uses a transformed low view behind t
   client.emit('update', 1 / 60)
   assert.equal(server.app.state.pool.owner, 'alice')
   assert.equal(client.control.camera.write, true)
+  client.emit('update', 1) // The final low view follows the entry transition.
   const local = client.control.camera.position.clone().sub(client.app.position).applyQuaternion(client.app.quaternion.clone().invert())
   const ball = server.app.state.pool.balls[0].p
   assert.ok(Math.abs(local.y - (physics.BALL_RADIUS + 0.14)) < 1e-10)

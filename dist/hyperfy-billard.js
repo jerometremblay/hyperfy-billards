@@ -1411,7 +1411,7 @@
     cueDirection.normalize();
     const contact = ball.clone().addScaledVector(across, side * BALL_RADIUS);
     contact.y += top * BALL_RADIUS;
-    const pullback = Math.max(0, Math.min(1, (speed - 0.1) / 4.9)) * 0.16;
+    const pullback = Math.max(0, Math.min(1, (speed - 0.1) / 4.9)) * 0.14;
     const gap = BALL_RADIUS * Math.sqrt(Math.max(0, 1 - side * side - top * top)) + 0.012 + pullback;
     const cuePosition = contact.clone().addScaledVector(cueDirection, -(0.735 + gap));
     const cueQuaternion = new Q().setFromUnitVectors(new V(0, 1, 0), cueDirection);
@@ -1434,17 +1434,27 @@
   // src/stroke.js
   var STROKE_CONTACT = 0.3;
   var STROKE_END = 0.82;
+  var BACKSWING_END = 0.1;
   function strokePose(stroke, elapsed) {
     const pose = shotPose(stroke.ball, stroke.angle, stroke.side, stroke.top, AIM_ELEVATION, stroke.speed);
     const forward = pose.cueDirection;
     const toContact = pose.pullback + 0.012;
+    const backswing = 4e-3 + pose.pullback * 0.1;
+    const hitSpeed = (stroke.speed ?? 2.5) * (1 - 0.25 * ((stroke.side ?? 0) ** 2 + (stroke.top ?? 0) ** 2));
     let displacement;
-    if (elapsed <= STROKE_CONTACT) {
-      const t = Math.max(0, (elapsed - 0.08) / (STROKE_CONTACT - 0.08));
-      displacement = toContact * t * t;
+    if (elapsed <= BACKSWING_END) {
+      const t = Math.max(0, elapsed / BACKSWING_END);
+      displacement = -backswing * (1 - Math.cos(Math.PI * t)) / 2;
+    } else if (elapsed <= STROKE_CONTACT) {
+      const duration = STROKE_CONTACT - BACKSWING_END;
+      const distance = toContact + backswing;
+      const t = (elapsed - BACKSWING_END) / duration;
+      displacement = -backswing + distance * t ** (hitSpeed * duration / distance);
     } else {
-      const t = Math.min(1, (elapsed - STROKE_CONTACT) / 0.16);
-      displacement = toContact + (0.06 + pose.pullback * 0.45) * (1 - (1 - t) ** 2);
+      const followThrough = Math.min(0.06 + pose.pullback * 0.45, hitSpeed * 0.08);
+      const duration = 2 * followThrough / hitSpeed;
+      const t = Math.min(1, (elapsed - STROKE_CONTACT) / duration);
+      displacement = toContact + followThrough * (2 * t - t * t);
     }
     pose.cuePosition.addScaledVector(forward, displacement);
     return pose;
@@ -1770,7 +1780,32 @@
     const shoulder = relative("rightUpperArm");
     const height = Number.isFinite(player.height) ? player.height : head ? Math.max(1, Math.min(2.5, head.y / 0.882)) : 1.6686;
     const cueOffset = Math.max(0.24, (shoulder?.x ?? height * 0.1) + 0.09);
-    return { height, hipsY: hips?.y ?? height * 0.568, footY: foot?.y ?? height * 0.0613, cueOffset };
+    const length = (a, b, fallback) => {
+      const first = relative(a), second = relative(b);
+      return first && second ? first.distanceTo(second) : fallback;
+    };
+    const bridgeHand = relative("leftHand"), bridgeMiddle = relative("leftMiddleProximal");
+    const bridgeIndex = relative("leftIndexProximal"), bridgeLittle = relative("leftLittleProximal");
+    const palmNormal = bridgeHand && bridgeMiddle && bridgeIndex && bridgeLittle ? bridgeMiddle.clone().sub(bridgeHand).normalize().cross(bridgeIndex.clone().sub(bridgeLittle)).normalize() : null;
+    const bridgeFingers = Object.fromEntries(["Index", "Middle", "Ring", "Little"].map((finger) => {
+      const base = relative("left" + finger + "Proximal");
+      const middle = relative("left" + finger + "Intermediate");
+      return [finger, {
+        height: palmNormal && base ? -base.clone().sub(bridgeHand).dot(palmNormal) : 0,
+        length: base && middle ? base.distanceTo(middle) : 0.032 * height / 1.8256
+      }];
+    }));
+    return {
+      height,
+      hipsY: hips?.y ?? height * 0.568,
+      footY: foot?.y ?? height * 0.0613,
+      cueOffset,
+      palmLength: length("rightHand", "rightMiddleProximal", 0.091586 * height / 1.8256),
+      handWidth: length("rightIndexProximal", "rightLittleProximal", 0.061071 * height / 1.8256),
+      bridgePalmLength: length("leftHand", "leftMiddleProximal", 0.091586 * height / 1.8256),
+      bridgeWidth: length("leftIndexProximal", "leftLittleProximal", 0.061071 * height / 1.8256),
+      bridgeFingers
+    };
   }
   function playerAimPose(player, cuePosition, cueQuaternion, contactPosition, measurements = { height: 1.6686, hipsY: 0.94786, footY: 0.1023 }) {
     const inverse = player.quaternion.clone().invert();
@@ -1779,15 +1814,21 @@
     const { height, hipsY, footY } = measurements;
     const gripOffset = Math.max(-0.4, Math.min(-0.08, -0.28 + (height - 1.8256) * 0.85));
     const grip = cuePosition.clone().addScaledVector(cueDirection, gripOffset);
-    const reach = 0.95 + (height - 1.8256) * 1.4;
+    const reach = 0.93 + (height - 1.8256) * 1.4;
     const alongCue = new V(cueDirection.x, 0, cueDirection.z).normalize();
     const distance = contactPosition.clone().sub(player.position).dot(alongCue);
     const bridgeDistance = Math.max(0.23, Math.min(0.75, distance - reach));
-    const bridge = contactPosition.clone().addScaledVector(cueDirection, -bridgeDistance);
-    bridge.y = contactPosition.y - 0.028575 + 0.022;
+    const across = new V(-cueDirection.z, 0, cueDirection.x).normalize();
+    const bridgeScale = (measurements.bridgePalmLength ?? 0.091586 * height / 1.8256) / 0.091586;
+    const bridgeWidth = measurements.bridgeWidth ?? 0.061071 * height / 1.8256;
+    const bridge = cuePosition.clone().addScaledVector(
+      cueDirection,
+      contactPosition.clone().sub(cuePosition).dot(cueDirection) - bridgeDistance
+    ).addScaledVector(across, -bridgeWidth * 0.62);
+    bridge.y = contactPosition.y - 0.028575 + 0.035 * bridgeScale;
     const clothY = local(contactPosition).y - 0.028575;
     const legSpan = Math.max(0.3, hipsY - footY);
-    const knee = 2 * Math.acos(Math.max(0.6, Math.min(1, (clothY + 0.065 - footY) / legSpan)));
+    const knee = 2 * Math.acos(Math.max(0.6, Math.min(1, (clothY + 0.16 - footY) / legSpan)));
     const lean = Math.max(0.65, Math.min(1.2, 1 + (height - 1.6686) * 0.4));
     const hipsOffset = -legSpan * (1 - Math.cos(knee / 2)) - 0.028 * height / 1.6686;
     const back = cueDirection.clone().negate();
@@ -1799,8 +1840,9 @@
       0,
       "YXZ"
     ))).multiply(GRIP_FRAME);
-    const handScale = height / 1.8256;
-    const gripWrist = grip.clone().addScaledVector(outside, 0.034 * handScale).addScaledVector(wristUp, 0.09 * handScale);
+    const handScale = (measurements.palmLength ?? 0.091586 * height / 1.8256) / 0.091586;
+    const widthScale = (measurements.handWidth ?? 0.061071 * height / 1.8256) / 0.061071;
+    const gripWrist = grip.clone().addScaledVector(outside, 0.034 * widthScale).addScaledVector(wristUp, 0.09 * handScale);
     const gripFingers = {};
     for (const [finger, angles] of Object.entries(GRIP_CURLS)) {
       for (const [i, segment] of ["Proximal", "Intermediate", "Distal"].entries()) {
@@ -1815,18 +1857,23 @@
       gripFingers["Thumb" + segment] = gripRotation.clone().multiply(new Q().setFromAxisAngle(Z, segment === "Distal" ? 0 : 0.4)).multiply(new Q().setFromAxisAngle(Y, angle)).toArray();
     }
     const bridgeRotation = inverse.clone().multiply(
-      new Q().setFromUnitVectors(FORWARD, cueDirection)
+      new Q().setFromUnitVectors(FORWARD, alongCue)
     );
     const fingers = {};
     for (const finger of ["Index", "Middle", "Ring", "Little"]) {
-      const spread = { Index: -0.15, Middle: 0, Ring: 0.16, Little: 0.32 }[finger];
+      const spread = { Index: -0.08, Middle: 0, Ring: 0.16, Little: 0.32 }[finger];
+      const base = measurements.bridgeFingers?.[finger] ?? { height: 0, length: 0.032 * bridgeScale };
+      const padHeight = 0.32 * base.length + 1e-3;
+      const curl = Math.asin(Math.max(0, Math.min(
+        0.95,
+        (0.035 * bridgeScale + base.height - padHeight) / base.length
+      )));
       for (const segment of ["Proximal", "Intermediate", "Distal"]) {
-        const curl = segment === "Proximal" ? 0.12 : 0.22;
-        fingers[finger + segment] = bridgeRotation.clone().multiply(new Q().setFromEuler(new E(-curl, spread, 0))).toArray();
+        fingers[finger + segment] = bridgeRotation.clone().multiply(new Q().setFromEuler(new E(segment === "Proximal" ? -curl : 0, spread, 0, "YXZ"))).toArray();
       }
     }
-    for (const segment of ["Metacarpal", "Proximal", "Distal"]) {
-      fingers["Thumb" + segment] = bridgeRotation.clone().multiply(new Q().setFromEuler(new E(-0.1, -0.55, -0.3))).toArray();
+    for (const [segment, lift] of [["Metacarpal", 0.5], ["Proximal", 0.15], ["Distal", 0.1]]) {
+      fingers["Thumb" + segment] = bridgeRotation.clone().multiply(new Q().setFromEuler(new E(lift, -0.03, 0))).toArray();
     }
     return {
       bones: {
@@ -1889,6 +1936,7 @@
     let poseMeasurements = null, savedCamera = null, cameraHold = null;
     let aimCameraPosition = null, aimCameraTarget = null, strokePlayback = null, completedStrokeId = -1;
     const riseDuration = 1;
+    let aimEntry = null, posedBody = false, poseEntryAt = null, aimCameraPending = false;
     let soundEvents = [], lastEventId = latest?.lastEventId || 0;
     const cueEvent = CUE_EVENT;
     const aimingEvent = `billard:aiming:${playChannel}`;
@@ -1971,6 +2019,8 @@
       }
       poseMeasurements = null;
       posedPlayer = null;
+      posedBody = false;
+      poseEntryAt = null;
     };
     const releaseStroke = () => {
       if (!cameraHold?.holding) return;
@@ -1997,6 +2047,8 @@
       control = null;
       pending = false;
       if (!keepPose) {
+        aimEntry = null;
+        aimCameraPending = false;
         if (strokePlayback) completedStrokeId = Math.max(completedStrokeId, strokePlayback.stroke.id);
         strokePlayback = null;
         clearPose();
@@ -2023,36 +2075,41 @@
       return true;
     };
     const begin = () => {
-      if (control || !pending || !hasCue() || latest?.moving) return;
+      if (control || !pending || !idle || !hasCue() || latest?.moving) return;
       pending = false;
       side = top = 0;
       if (latest.scratched) {
         placeX = -size.length / 4;
         placeY = 0;
       }
-      control = app2.control();
+      control = idle;
       idle = null;
       for (const key of ["keyW", "keyA", "keyS", "keyD", "arrowLeft", "arrowRight", "arrowUp", "arrowDown", "space", "keyR", "escape"])
         control[key].capture = true;
       control.camera.write = true;
       control.camera.zoom = 0;
+      control.camera.position.copy(aimEntry.position);
+      aimCameraPending = true;
       app2.on("lateUpdate", updateCamera);
-      savedCamera = me.getCamera?.() || null;
-      const ball = latest.balls[0].p;
-      me.setCamera?.({ target: worldPosition(new V(ball[0], BALL_RADIUS + ball[2], -ball[1])), firstPerson: true, headOnly: true });
       control.scrollDelta.capture = true;
       control.space.onPress = () => {
         if (!latest || latest.moving || !hasCue()) return;
         if (latest.scratched) placeCueBall();
         else {
-          const ball2 = latest.balls[0].p;
+          const ball = latest.balls[0].p;
           cameraHold = {
             control: null,
             returnAt: null,
             holding: control.space.down,
             strokeId: latest.seq + 1,
             position: control.camera.position.clone(),
-            target: worldPosition(new V(ball2[0], BALL_RADIUS + ball2[2], -ball2[1]))
+            target: worldPosition(new V(ball[0], BALL_RADIUS + ball[2], -ball[1]))
+          };
+          if (aimEntry) aimEntry = {
+            at: clock,
+            duration: 0.1,
+            position: control.camera.position.clone(),
+            quaternion: control.camera.quaternion.clone()
           };
           strokePlayback = {
             local: true,
@@ -2061,7 +2118,7 @@
             stroke: {
               id: cameraHold.strokeId,
               playerId: me.id,
-              ball: ball2.slice(),
+              ball: ball.slice(),
               angle,
               speed,
               side,
@@ -2126,6 +2183,8 @@
       if (!pending && idle) {
         idle.release();
         idle = null;
+        aimEntry = null;
+        savedCamera = null;
       }
       refresh2();
       wake();
@@ -2151,6 +2210,16 @@
       requestedAt = clock;
       if (isNearby()) setBallsActive(true);
       idle = app2.control();
+      savedCamera = me.getCamera?.() || null;
+      aimEntry = {
+        at: null,
+        duration: riseDuration,
+        position: idle.camera.position.clone().add(new V(0, 0, idle.camera.zoom || 0).applyQuaternion(idle.camera.quaternion)),
+        quaternion: idle.camera.quaternion.clone()
+      };
+      idle.camera.position.copy(aimEntry.position);
+      idle.camera.zoom = 0;
+      idle.camera.write = true;
       idle.pointer.lock();
       poseMeasurements = playerMeasurements(me);
       app2.send("pool:claim", { angle, cueOffset: poseMeasurements.cueOffset });
@@ -2166,19 +2235,23 @@
     refresh2();
     app2.emit(`${cueEvent}:request`);
     const axis = new V();
+    const cameraRotation = new Q();
+    const cameraUp = new V(0, 1, 0);
     const worldPosition = (local) => local.clone().multiply(app2.scale).applyQuaternion(app2.quaternion).add(app2.position);
     const writeAimCamera = (camera, position, target) => {
       camera.position.copy(position);
-      const leftEye = me.getBoneTransform?.("leftEye");
-      if (leftEye) camera.position.setFromMatrixPosition(leftEye);
-      const rightEye = me.getBoneTransform?.("rightEye");
-      if (rightEye) {
-        const right = new V().setFromMatrixPosition(rightEye);
-        if (leftEye) camera.position.add(right).multiplyScalar(0.5);
-        else camera.position.copy(right);
-      } else if (!leftEye) {
-        const head = me.getBoneTransform?.("head");
-        if (head) camera.position.setFromMatrixPosition(head);
+      const boneOptions = { targetPose: !!aimEntry };
+      const rightEye = me.getBoneTransform?.("rightEye", boneOptions);
+      if (rightEye) camera.position.setFromMatrixPosition(rightEye);
+      else {
+        const leftEye = me.getBoneTransform?.("leftEye", boneOptions);
+        const anchor = leftEye || me.getBoneTransform?.("head", boneOptions);
+        if (anchor) {
+          camera.position.setFromMatrixPosition(anchor);
+          const height = Number.isFinite(me.height) ? me.height : 1.7;
+          axis.copy(target).sub(camera.position).cross(cameraUp).normalize();
+          camera.position.addScaledVector(axis, (leftEye ? 0.06 : 0.03) * height / 1.7);
+        }
       }
       const look = target.clone().sub(camera.position);
       camera.quaternion.setFromEuler(new E(
@@ -2187,6 +2260,18 @@
         0,
         "YXZ"
       ));
+      if (aimEntry) {
+        if (aimEntry.at === null) {
+          camera.position.copy(aimEntry.position);
+          camera.quaternion.copy(aimEntry.quaternion);
+          return;
+        }
+        const t = Math.min(1, Math.max(0, (clock - aimEntry.at) / aimEntry.duration));
+        const blend = t * t * (3 - 2 * t);
+        camera.position.lerpVectors(aimEntry.position, camera.position, blend);
+        camera.quaternion.slerpQuaternions(aimEntry.quaternion, cameraRotation.copy(camera.quaternion), blend);
+        if (t === 1) aimEntry = null;
+      }
     };
     const updateCamera = () => {
       if (control && aimCameraPosition && aimCameraTarget)
@@ -2200,6 +2285,18 @@
       const visualDelta = Math.max(0, now - frameTime);
       frameTime = now;
       clock += visualDelta;
+      if (aimCameraPending && aimEntry) {
+        aimCameraPending = false;
+        aimEntry.at = clock;
+        const ball = latest.balls[0].p;
+        me.setCamera?.({
+          target: worldPosition(new V(ball[0], BALL_RADIUS + ball[2], -ball[1])),
+          firstPerson: true,
+          headOnly: true,
+          armsOnly: true,
+          duration: aimEntry.duration
+        });
+      }
       if (hoverRefreshPending) {
         hoverRefreshPending = false;
         refresh2();
@@ -2350,6 +2447,8 @@ Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
         if (poseMeasurements && Number.isFinite(player.height) && Math.abs(player.height - poseMeasurements.height) > 0.05) {
           player.setPose?.(null);
           poseMeasurements = null;
+          posedBody = false;
+          poseEntryAt = null;
         }
         if (!poseMeasurements) poseMeasurements = playerMeasurements(player);
         posedPlayer = actor;
@@ -2368,7 +2467,12 @@ Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
           position: predicted.position.toArray(),
           quaternion: predicted.quaternion.toArray()
         };
-        player.setPose?.(avatarPose);
+        const entering = !posedBody && !stroke;
+        const earlyShot = stroke && (actor === me.id && !posedBody || poseEntryAt !== null && clock - poseEntryAt < riseDuration);
+        player.setPose?.(avatarPose, { duration: entering ? riseDuration : earlyShot ? 0.1 : 0 });
+        if (entering) poseEntryAt = clock;
+        if (stroke) poseEntryAt = null;
+        posedBody = true;
         app2.emit(poseEvent, {
           playerId: actor,
           tableId: app2.instanceId,
