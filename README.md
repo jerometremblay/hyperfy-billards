@@ -243,6 +243,18 @@ response, rounded pocket jaws, and pocket capture/fall code. The adapter supplie
 standard surface dimensions and ball mass/radius, a fixed 1/480-second step, and
 bounded inputs. Ball collision restitution is upstream's **0.925**, not 1.
 
+The table's **Rolling resistance (1 = normal)** setting controls cloth friction.
+It defaults to `1`, preserving the existing roll; use `2` for twice the rolling
+resistance and shorter travel. The range is `0.25`–`4`, in `0.05` steps. It scales upstream's
+rolling-friction coefficient (`0.007 × setting`) and its associated spin decay.
+Sliding friction, shot power and collision restitution stay unchanged. The
+server applies the setting to its simulation; clients still display snapshots.
+Rolling resistance updates live without reracking, restarting aim or interrupting
+an active stroke. Moving balls keep their current position and velocity and use
+the new friction from the next server physics step. Other table properties still
+use the normal app reload. Live property updates require this fork's `live: true`
+field support.
+
 This is a numerical model, not perfect physical truth. Upstream detects predicted
 end-step overlaps; it is not an exact event-time solver. Small steps and bounded
 speed reduce missed contacts but do not prove every grazing or simultaneous

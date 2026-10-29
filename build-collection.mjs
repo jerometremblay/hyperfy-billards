@@ -27,7 +27,14 @@ const tableSource = table.assets.find(a => a.url === table.blueprint.script).byt
 const gameSource = game.assets.find(a => a.url === game.blueprint.script).bytes.toString()
 // The furniture uses floor-level coordinates; the existing simulator uses cloth
 // level. Keep both unchanged and attach game visuals at the table's cloth height.
-const source = Buffer.from(`;(function(world, app, props) {\n${tableSource}\n})(world, app, { ...props, poolChannel: props.poolChannel || app.instanceId });
+const source = Buffer.from(`;let tableFields = [];
+const tableApp = new Proxy(app, {
+  get(target, key) {
+    if (key === 'configure') return fields => { tableFields = fields; };
+    return target[key];
+  }
+});
+(function(world, app, props) {\n${tableSource}\n})(world, tableApp, { ...props, poolChannel: props.poolChannel || app.instanceId });
 const gameRoot = world.isClient ? app.create('group', { position: [0, 0.708, 0] }) : null;
 if (gameRoot) app.add(gameRoot);
 const gameApp = new Proxy(app, {
@@ -35,7 +42,9 @@ const gameApp = new Proxy(app, {
     if (key === 'position') return target.position.clone().add(
       new Vector3(0, 0.708, 0).multiply(target.scale).applyQuaternion(target.quaternion));
     if (key === 'add') return node => gameRoot.add(node);
-    if (key === 'configure') return () => {};
+    if (key === 'configure') return fields => target.configure([
+      ...tableFields, ...fields.filter(field => field.key === 'rollingResistance')
+    ]);
     return target[key];
   }
 });

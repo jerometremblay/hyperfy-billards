@@ -1,7 +1,7 @@
 import { Vector3 } from 'three'
 import { Ball, State } from '../vendor/tailuge/model/ball.ts'
 import { Table } from '../vendor/tailuge/model/table.ts'
-import { R, setR, setm, setmu } from '../vendor/tailuge/model/physics/constants.ts'
+import { R, mu, setR, setm, setmu } from '../vendor/tailuge/model/physics/constants.ts'
 import { cueStrike } from '../vendor/tailuge/model/physics/physics.ts'
 import { TableGeometry } from '../vendor/tailuge/view/tablegeometry.ts'
 import { PocketGeometry } from '../vendor/tailuge/view/pocketgeometry.ts'
@@ -29,12 +29,12 @@ export function rackPositions(preset) {
   return positions
 }
 export class Simulation {
-  constructor(preset = '9') {
+  constructor(preset = '9', rollingResistance = 1) {
     this.preset = preset
     this.size = dimensions(preset)
     setR(BALL_RADIUS)
     setm(0.17)
-    setmu(0.007)
+    this.setRollingResistance(rollingResistance)
     Object.assign(TableGeometry, {
       X: this.size.length / 2,
       Y: this.size.width / 2,
@@ -45,6 +45,10 @@ export class Simulation {
     PocketGeometry.scaleToRadius(R)
     this.eventId = 0
     this.reset()
+  }
+  setRollingResistance(value) {
+    this.rollingResistance = Number.isFinite(value) ? Math.max(0.25, Math.min(4, value)) : 1
+    setmu(0.007 * this.rollingResistance)
   }
   reset() {
     this.table = new Table(
@@ -110,6 +114,9 @@ export class Simulation {
   step() {
     if (!this.moving || this.error) return
     try {
+      // Upstream coefficients are module-wide; restore this table before advancing.
+      const friction = 0.007 * this.rollingResistance
+      if (mu !== friction) setmu(friction)
       this.table.advance(STEP)
       for (const event of this.table.outcome) {
         if (event.incidentSpeed < 0.03) continue

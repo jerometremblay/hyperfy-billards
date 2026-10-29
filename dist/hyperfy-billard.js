@@ -1266,12 +1266,12 @@
     return positions;
   }
   var Simulation = class {
-    constructor(preset2 = "9") {
+    constructor(preset2 = "9", rollingResistance = 1) {
       this.preset = preset2;
       this.size = dimensions(preset2);
       setR(BALL_RADIUS);
       setm(0.17);
-      setmu(7e-3);
+      this.setRollingResistance(rollingResistance);
       Object.assign(TableGeometry, {
         X: this.size.length / 2,
         Y: this.size.width / 2,
@@ -1282,6 +1282,10 @@
       PocketGeometry.scaleToRadius(R);
       this.eventId = 0;
       this.reset();
+    }
+    setRollingResistance(value) {
+      this.rollingResistance = Number.isFinite(value) ? Math.max(0.25, Math.min(4, value)) : 1;
+      setmu(7e-3 * this.rollingResistance);
     }
     reset() {
       this.table = new Table(
@@ -1335,6 +1339,8 @@
     step() {
       if (!this.moving || this.error) return;
       try {
+        const friction = 7e-3 * this.rollingResistance;
+        if (mu !== friction) setmu(friction);
         this.table.advance(STEP);
         for (const event of this.table.outcome) {
           if (event.incidentSpeed < 0.03) continue;
@@ -1461,8 +1467,9 @@
   }
 
   // src/server.js
-  function startServer(world2, app2, preset2) {
-    const sim = new Simulation(preset2);
+  function startServer(world2, app2, preset2, rollingResistance) {
+    const sim = new Simulation(preset2, rollingResistance);
+    app2.on("props", (next) => sim.setRollingResistance(next.rollingResistance));
     let owner = null, leaseUntil = 0, seq = 0, rack = 0, accumulator = 0, sinceSnapshot = 0, cueHolders = [], aim = null, stroke = null, lastAimAt = -Infinity, updateAttached = false, leaseTimerScheduled = false, stanceFloorY = -0.708, stanceCueOffset = 0.28, lastStance = null;
     const publish = () => {
       app2.state.aim = aim;
@@ -2519,13 +2526,24 @@ Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
       ],
       initial: "9"
     },
+    {
+      key: "rollingResistance",
+      type: "range",
+      label: "Rolling resistance (1 = normal)",
+      min: 0.25,
+      max: 4,
+      step: 0.05,
+      initial: 1,
+      live: true,
+      hint: "Higher values shorten ball travel; lower values make the cloth faster."
+    },
     ...[["Hit", "Cue strike"], ["Collision", "Ball collision"], ["Cushion", "Cushion hit"], ["Pot", "Pocket drop"]].map(([type, label]) => ({ key: `sound${type}`, type: "file", kind: "audio", label: `${label} sound` })),
     { key: "showSurface", type: "toggle", label: "Show practice surface", initial: true },
     { key: "playChannel", type: "text", label: "Table and cue rack channel", initial: "classic-8-ft-pool-table" }
   ]);
   var preset = props.tableSize === "8" ? "8" : "9";
   if (world.isServer) {
-    startServer(world, app, preset);
+    startServer(world, app, preset, props.rollingResistance);
   } else {
     const size = dimensions(preset);
     const { length: L, width: W } = size;

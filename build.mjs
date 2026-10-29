@@ -59,6 +59,7 @@ const blueprint = {
   props: {
     ...Object.fromEntries(sounds.map(sound => [`sound${sound.type}`, { type: 'audio', url: sound.url }])),
     tableSize: '9',
+    rollingResistance: 1,
     showSurface: true,
     playChannel: 'classic-8-ft-pool-table',
     ...Object.fromEntries(textureUrls.slice(1).map((url, i) => [`ball${i + 1}`, { type: 'texture', url }])),

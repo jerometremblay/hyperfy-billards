@@ -5,8 +5,9 @@ import { CUE_EVENT, watchCues } from './cues.js'
 import { STROKE_CONTACT, STROKE_END } from './stroke.js'
 
 // Updates run only while a stroke or balls move; a held final pose needs no server frame work.
-export function startServer(world, app, preset) {
-  const sim = new Simulation(preset)
+export function startServer(world, app, preset, rollingResistance) {
+  const sim = new Simulation(preset, rollingResistance)
+  app.on('props', next => sim.setRollingResistance(next.rollingResistance))
   let owner = null,
     leaseUntil = 0,
     seq = 0,

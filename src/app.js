@@ -15,6 +15,9 @@ app.configure?.([
     ],
     initial: '9',
   },
+  { key: 'rollingResistance', type: 'range', label: 'Rolling resistance (1 = normal)',
+    min: 0.25, max: 4, step: 0.05, initial: 1, live: true,
+    hint: 'Higher values shorten ball travel; lower values make the cloth faster.' },
   ...[['Hit', 'Cue strike'], ['Collision', 'Ball collision'], ['Cushion', 'Cushion hit'], ['Pot', 'Pocket drop']]
     .map(([type, label]) => ({ key: `sound${type}`, type: 'file', kind: 'audio', label: `${label} sound` })),
   { key: 'showSurface', type: 'toggle', label: 'Show practice surface', initial: true },
@@ -22,7 +25,7 @@ app.configure?.([
 ])
 const preset = props.tableSize === '8' ? '8' : '9'
 if (world.isServer) {
-  startServer(world, app, preset)
+  startServer(world, app, preset, props.rollingResistance)
 } else {
   const size = dimensions(preset)
   const { length: L, width: W } = size
