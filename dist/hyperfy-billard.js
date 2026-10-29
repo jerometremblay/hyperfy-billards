@@ -1778,6 +1778,29 @@
     Little: [0.11225, 1.225, 1.85]
   };
   var rotation = (x, y = 0, z = 0) => new Q().setFromEuler(new E(x, y, z, "XYZ")).toArray();
+  var BODY_PARENTS = {
+    spine: "hips",
+    chest: "spine",
+    upperChest: "chest",
+    neck: "upperChest",
+    head: "neck",
+    rightShoulder: "upperChest",
+    rightUpperArm: "rightShoulder"
+  };
+  function bodyPoint(name, bones, body) {
+    if (name === "hips") return {
+      p: new V(...body.hips).add(new V(...bones.hips.position)),
+      q: new Q(...bones.hips.rotation)
+    };
+    let parent = BODY_PARENTS[name];
+    if (!body[name]) return bodyPoint(parent, bones, body);
+    while (!body[parent]) parent = BODY_PARENTS[parent];
+    const frame = bodyPoint(parent, bones, body);
+    const offset = new V(...body[name]).sub(new V(...body[parent]));
+    frame.p.add(offset.applyQuaternion(frame.q));
+    frame.q.multiply(new Q(...bones[name]?.rotation ?? [0, 0, 0, 1]));
+    return frame;
+  }
   function playerMeasurements(player) {
     const relative = (name) => {
       const matrix = player.getBoneTransform?.(name);
@@ -1794,14 +1817,36 @@
     const bridgeHand = relative("leftHand"), bridgeMiddle = relative("leftMiddleProximal");
     const bridgeIndex = relative("leftIndexProximal"), bridgeLittle = relative("leftLittleProximal");
     const palmNormal = bridgeHand && bridgeMiddle && bridgeIndex && bridgeLittle ? bridgeMiddle.clone().sub(bridgeHand).normalize().cross(bridgeIndex.clone().sub(bridgeLittle)).normalize() : null;
+    const bridgeForward = bridgeHand && bridgeMiddle ? bridgeMiddle.clone().sub(bridgeHand).normalize() : null;
+    const bridgeRight = palmNormal && bridgeForward ? palmNormal.clone().cross(bridgeForward).normalize() : null;
+    const bridgeOffset = (name) => {
+      const point = relative(name);
+      if (!point || !bridgeHand || !bridgeForward || !bridgeRight) return null;
+      point.sub(bridgeHand);
+      return [point.dot(bridgeRight), -point.dot(palmNormal), -point.dot(bridgeForward)];
+    };
     const bridgeFingers = Object.fromEntries(["Index", "Middle", "Ring", "Little"].map((finger) => {
       const base = relative("left" + finger + "Proximal");
       const middle = relative("left" + finger + "Intermediate");
       return [finger, {
         height: palmNormal && base ? -base.clone().sub(bridgeHand).dot(palmNormal) : 0,
-        length: base && middle ? base.distanceTo(middle) : 0.032 * height / 1.8256
+        side: bridgeRight && base ? base.clone().sub(bridgeHand).dot(bridgeRight) : 0,
+        length: base && middle ? base.distanceTo(middle) : 0.032 * height / 1.8256,
+        outerLength: length(
+          "left" + finger + "Intermediate",
+          "left" + finger + "Distal",
+          0.024 * height / 1.8256
+        ) * 2.15,
+        palmLength: base && bridgeHand && bridgeMiddle ? base.clone().sub(bridgeHand).dot(bridgeMiddle.clone().sub(bridgeHand).normalize()) : null
       }];
     }));
+    const bodyNames = [
+      "hips",
+      ...Object.keys(BODY_PARENTS),
+      ...["left", "right"].flatMap((side) => [side + "UpperLeg", side + "LowerLeg", side + "Foot"])
+    ];
+    const body = Object.fromEntries(bodyNames.map((name) => [name, relative(name)?.toArray()]));
+    const sight = relative("rightEye") ?? head?.clone().add(new V(0.03 * height / 1.7, 0, 0));
     return {
       height,
       hipsY: hips?.y ?? height * 0.568,
@@ -1811,10 +1856,26 @@
       handWidth: length("rightIndexProximal", "rightLittleProximal", 0.061071 * height / 1.8256),
       bridgePalmLength: length("leftHand", "leftMiddleProximal", 0.091586 * height / 1.8256),
       bridgeWidth: length("leftIndexProximal", "leftLittleProximal", 0.061071 * height / 1.8256),
-      bridgeFingers
+      bridgeArmLength: length("leftUpperArm", "leftLowerArm", 0.26 * height / 1.8256) + length("leftLowerArm", "leftHand", 0.26 * height / 1.8256),
+      bridgeFingers,
+      bridgeIndex: bridgeOffset("leftIndexProximal"),
+      bridgeThumb: bridgeOffset("leftThumbMetacarpal"),
+      bridgeThumbLengths: [
+        length("leftThumbMetacarpal", "leftThumbProximal", 0.03 * height / 1.8256),
+        length("leftThumbProximal", "leftThumbDistal", 0.027 * height / 1.8256)
+      ],
+      body: [
+        "hips",
+        "head",
+        "rightUpperArm",
+        ...["left", "right"].flatMap((side) => [side + "UpperLeg", side + "LowerLeg", side + "Foot"])
+      ].every((name) => body[name]) && head.y - hips.y > 0.2 && length("leftUpperLeg", "leftLowerLeg", 0) > 0.15 ? body : null,
+      sight: sight?.toArray(),
+      gripUpperLength: length("rightUpperArm", "rightLowerArm", 0.26 * height / 1.8256),
+      gripLowerLength: length("rightLowerArm", "rightHand", 0.26 * height / 1.8256)
     };
   }
-  function playerAimPose(player, cuePosition, cueQuaternion, contactPosition, measurements = { height: 1.6686, hipsY: 0.94786, footY: 0.1023 }) {
+  function playerAimPose(player, cuePosition, cueQuaternion, contactPosition, measurements = { height: 1.6686, hipsY: 0.94786, footY: 0.1023 }, table = null) {
     const inverse = player.quaternion.clone().invert();
     const local = (point) => point.clone().sub(player.position).applyQuaternion(inverse);
     const cueDirection = UP.clone().applyQuaternion(cueQuaternion);
@@ -1836,7 +1897,7 @@
     const maxAdvance = (Math.sqrt(slopeSquared * legSpan * legSpan - baseLegHeight * baseLegHeight) - risePerAdvance * baseLegHeight) / slopeSquared;
     const advance = Math.min(extraReach * 0.75, Math.max(0, maxAdvance) * 0.9);
     const legHeight = baseLegHeight + advance * risePerAdvance;
-    const knee = 2 * Math.acos(Math.min(1, Math.hypot(legHeight, advance) / legSpan));
+    let knee = 2 * Math.acos(Math.min(1, Math.hypot(legHeight, advance) / legSpan));
     const lean = Math.max(0.65, Math.min(1.2, 1 + (height - 1.6686) * 0.4)) + advance;
     const hipsOffset = alongCue.clone().applyQuaternion(inverse).multiplyScalar(advance + step);
     hipsOffset.y = legHeight - legSpan - 0.028 * height / 1.6686;
@@ -1847,13 +1908,12 @@
     const upperLeg = (y, z) => new Q().setFromAxisAngle(X, lean).multiply(legTilt).multiply(new Q().setFromEuler(new E(knee / 2, y, z))).toArray();
     const foot = (y) => legTilt.clone().invert().premultiply(new Q().setFromAxisAngle(X, knee / 2)).multiply(new Q().setFromAxisAngle(Y, y)).toArray();
     const gripLimit = Math.max(-0.6, Math.min(-0.5, -0.5 - (height - 1.6686)));
-    const gripOffset = Math.max(
+    let gripOffset = Math.max(
       gripLimit,
       Math.max(-0.4, Math.min(-0.08, -0.28 + (height - 1.8256) * 0.85)) - Math.min(0.2, (extraReach - advance) * 0.5) - Math.min(0.2, Math.max(0, distance - 1.4)) + Math.max(0, step - 0.01) * 0.7
     );
-    const grip = cuePosition.clone().addScaledVector(cueDirection, gripOffset);
     const reach = 0.93 + (height - 1.8256) * 1.4;
-    const bridgeDistance = Math.max(0.23, Math.min(
+    let bridgeDistance = Math.max(0.23, Math.min(
       1,
       0.495 - gripOffset,
       distance - reach - advance * 0.7 + bodyClearance * 0.7 + step * 0.4
@@ -1867,10 +1927,221 @@
     );
     const bridgeScale = (measurements.bridgePalmLength ?? 0.091586 * height / 1.8256) / 0.091586;
     const bridgeWidth = measurements.bridgeWidth ?? 0.061071 * height / 1.8256;
-    const bridge = cuePosition.clone().addScaledVector(
+    const bridgeThumbScale = Math.max(0, Math.min(
+      1,
+      (0.091586 * bridgeScale - 0.07066) / (0.091586 - 0.07066)
+    ));
+    const clothFrame = new Q().setFromUnitVectors(FORWARD, alongCue);
+    let railFrame = clothFrame.clone();
+    let railNormal = null;
+    let railTopBridge = false;
+    let railSlideBridge = false;
+    let compactBridge = false;
+    let compactAdvance = 0;
+    let railSupportDistance = 0;
+    let sideBridge = null;
+    let railBlend = 0;
+    let bridgeType = "cloth";
+    const pivot = cuePosition.clone().addScaledVector(
       cueDirection,
-      contactPosition.clone().sub(cuePosition).dot(cueDirection) - bridgeDistance
-    ).addScaledVector(across, -bridgeWidth * 0.62);
+      contactPosition.clone().sub(cuePosition).dot(cueDirection)
+    );
+    if (table) {
+      const tableInverse = table.quaternion.clone().invert();
+      const point = pivot.clone().sub(table.position).applyQuaternion(tableInverse);
+      const direction = alongCue.clone().applyQuaternion(tableInverse);
+      const lateral = across.clone().applyQuaternion(tableInverse);
+      const planted = point.clone().addScaledVector(
+        direction,
+        -bridgeDistance * Math.hypot(cueDirection.x, cueDirection.z)
+      ).addScaledVector(lateral, -bridgeWidth * 0.62);
+      const heel = planted.clone().addScaledVector(direction, -9e-3 * bridgeScale);
+      const fingerReach = Math.max(...["Index", "Middle", "Ring", "Little"].map((finger) => {
+        const base = measurements.bridgeFingers?.[finger];
+        return (base?.palmLength ?? 0.091586 * bridgeScale) + 2.4 * (base?.length ?? 0.032 * bridgeScale);
+      }));
+      const fingertips = planted.clone().addScaledVector(direction, fingerReach);
+      const halfWidth = bridgeWidth + 4e-3;
+      const halfX = table.size.length / 2, halfZ = table.size.width / 2;
+      const clearanceX = halfX - Math.max(Math.abs(heel.x), Math.abs(fingertips.x)) - Math.abs(lateral.x) * halfWidth;
+      const clearanceZ = halfZ - Math.max(Math.abs(heel.z), Math.abs(fingertips.z)) - Math.abs(lateral.z) * halfWidth;
+      railBlend = Math.min(clearanceX, clearanceZ) < 4e-3 * bridgeScale ? 1 : 0;
+      const back2 = direction.clone().negate();
+      const exitX = Math.abs(back2.x) < 1e-9 ? Infinity : (Math.sign(back2.x) * halfX - point.x) / back2.x;
+      const exitZ = Math.abs(back2.z) < 1e-9 ? Infinity : (Math.sign(back2.z) * halfZ - point.z) / back2.z;
+      const cushionDistance = Math.max(1e-3, Math.min(exitX, exitZ));
+      const railDistance = Math.max(0.08, cushionDistance) + 0.085;
+      if (railBlend > 0) {
+        const shortDistance = Math.min(bridgeDistance, cushionDistance - 0.045 * bridgeScale);
+        const shortWrist = point.clone().addScaledVector(direction, -shortDistance).addScaledVector(lateral, -bridgeWidth * 0.62);
+        const shortHeel = shortWrist.clone().addScaledVector(direction, -0.012 * bridgeScale);
+        const shortTips = shortWrist.clone().addScaledVector(
+          direction,
+          (measurements.bridgePalmLength ?? 0.091586 * bridgeScale) + 0.075 * bridgeScale
+        );
+        const shortWidth = bridgeWidth * 0.75 + 4e-3;
+        compactBridge = shortDistance >= (0.21 + 0.03 * (1 - bridgeThumbScale)) * bridgeScale && halfX - Math.max(Math.abs(shortHeel.x), Math.abs(shortTips.x)) - Math.abs(lateral.x) * shortWidth > 0.012 && halfZ - Math.max(Math.abs(shortHeel.z), Math.abs(shortTips.z)) - Math.abs(lateral.z) * shortWidth > 0.012;
+        if (compactBridge) {
+          compactAdvance = Math.max(0, bridgeDistance - shortDistance);
+          bridgeDistance = shortDistance;
+          bridgeType = "cloth-tight";
+          railBlend = 0;
+        }
+      }
+      if (railBlend > 0) {
+        const outerX = Math.abs(back2.x) < 1e-9 ? Infinity : (Math.sign(back2.x) * (halfX + 0.18 + 0.045 * bridgeScale) - point.x) / back2.x;
+        const outerZ = Math.abs(back2.z) < 1e-9 ? Infinity : (Math.sign(back2.z) * (halfZ + 0.18 + 0.045 * bridgeScale) - point.z) / back2.z;
+        railTopBridge = Math.min(outerX, outerZ) > Math.max(0.75, bridgeDistance + 0.2);
+        railSlideBridge = !railTopBridge && cushionDistance > 0.085 * bridgeScale;
+        const endRail = railTopBridge ? clearanceX < clearanceZ : railSlideBridge ? exitX < exitZ : outerX < outerZ;
+        const normal = endRail ? new V(Math.sign(planted.x), 0, 0) : new V(0, 0, Math.sign(planted.z));
+        bridgeType = railTopBridge ? "rail-top" : railSlideBridge ? "rail-slide" : `rail-${endRail ? "x" : "z"}-${endRail ? normal.x : normal.z}`;
+        railNormal = normal.clone().applyQuaternion(table.quaternion);
+        const outer = (endRail ? halfX : halfZ) + 0.18;
+        const wrist = point.clone();
+        if (endRail) wrist.x = normal.x * (outer + 0.045 * bridgeScale);
+        else wrist.z = normal.z * (outer + 0.045 * bridgeScale);
+        sideBridge = wrist.applyQuaternion(table.quaternion).add(table.position);
+        const inward = railNormal.clone().negate();
+        railFrame.setFromUnitVectors(FORWARD, inward);
+        if (railTopBridge || railSlideBridge) railFrame.copy(clothFrame);
+        railSupportDistance = cushionDistance + 0.13 / Math.max(0.25, Math.abs(direction.dot(normal)));
+        const railStep = 0.05 + Math.min(0.25, Math.max(
+          0,
+          0.52 - (measurements.bridgeArmLength ?? 0.52 * height / 1.8256)
+        ) * 3);
+        const railAdvance = railStep;
+        gripOffset += 0.015 + (railTopBridge ? 0 : Math.max(0, railAdvance - 0.05) * 1.3);
+        if (railTopBridge) bridgeDistance += 0.06;
+        hipsOffset.addScaledVector(alongCue.clone().applyQuaternion(inverse), railAdvance);
+        legTilt.setFromAxisAngle(
+          alongCue.clone().applyQuaternion(inverse).cross(UP).normalize(),
+          -Math.atan2(advance + railAdvance, legHeight)
+        );
+        knee = 2 * Math.acos(Math.min(1, Math.hypot(legHeight, advance + railAdvance) / legSpan));
+      }
+      if (compactBridge) {
+        const shoulderAdvance = Math.min(0.3, compactAdvance + 0.07);
+        hipsOffset.addScaledVector(alongCue.clone().applyQuaternion(inverse), shoulderAdvance);
+        gripOffset += shoulderAdvance * 1.1;
+        legTilt.setFromAxisAngle(
+          alongCue.clone().applyQuaternion(inverse).cross(UP).normalize(),
+          -Math.atan2(advance + shoulderAdvance, legHeight)
+        );
+        knee = 2 * Math.acos(Math.min(1, Math.hypot(legHeight, advance + shoulderAdvance) / legSpan));
+      }
+      const outwardComponent = exitX < exitZ ? Math.abs(back2.x) : Math.abs(back2.z);
+      const flatDistance = cushionDistance + 0.04 / Math.max(1e-3, outwardComponent);
+      const clothHeight = contactPosition.y - 0.028575;
+      const slope = Math.max(
+        0.045,
+        (clothHeight + 0.0433 + 6e-3 - pivot.y) / flatDistance,
+        (clothHeight + 0.0363 + 6e-3 - pivot.y) / cushionDistance
+      );
+      const closeBlend = Math.max(0, Math.min(1, (0.11 - cushionDistance) / 0.04));
+      const closeSlope = Math.max(
+        0.045,
+        (clothHeight + 0.06 - pivot.y) / Math.min(0.23, railDistance)
+      );
+      let elevation = slope + (closeSlope - slope) * closeBlend * closeBlend * (3 - 2 * closeBlend);
+      const cueBridge = point.clone().addScaledVector(direction, -0.23).addScaledVector(lateral, -bridgeWidth * 0.62);
+      const cueClearance = Math.min(halfX - Math.abs(cueBridge.x), halfZ - Math.abs(cueBridge.z));
+      const lift = Math.max(0, Math.min(1, (0.055 * bridgeScale + 0.06 - cueClearance) / 0.06));
+      const parallel = Math.max(0, Math.min(1, (cushionDistance - 0.5) / 0.25));
+      elevation = Math.max(elevation, 0.045 + (closeSlope - 0.045) * parallel * lift * lift * (3 - 2 * lift));
+      if (elevation > 0.045 + 1e-9) {
+        const shaftDistance = cuePosition.clone().sub(pivot).dot(cueDirection);
+        cueDirection.copy(alongCue).addScaledVector(UP, -elevation).normalize();
+        cuePosition.copy(pivot).addScaledVector(cueDirection, shaftDistance);
+        cueQuaternion.setFromUnitVectors(UP, cueDirection);
+      }
+    }
+    const bones = {
+      hips: { rotation: rotation(-lean), position: hipsOffset.toArray() },
+      spine: { rotation: rotation(-0.25) },
+      chest: { rotation: rotation(-0.18, -0.08) },
+      upperChest: { rotation: rotation(-0.08) },
+      neck: { rotation: rotation(0.5) },
+      head: { rotation: rotation(0.55, 0.08) },
+      leftUpperLeg: { rotation: upperLeg(0.05, -0.08) },
+      leftLowerLeg: { rotation: rotation(-knee) },
+      leftFoot: { rotation: foot(0.08) },
+      rightUpperLeg: { rotation: upperLeg(-0.08, 0.08) },
+      rightLowerLeg: { rotation: rotation(-knee) },
+      rightFoot: { rotation: foot(-0.1) }
+    };
+    if (table && bridgeType === "cloth" && measurements.body) {
+      const body = measurements.body;
+      hipsOffset.addScaledVector(alongCue.clone().applyQuaternion(inverse), -Math.min(0.08, (advance + step) * 0.5));
+      bones.hips.position = hipsOffset.toArray();
+      bones.hips.rotation = rotation(-0.8 - (height - 1.6686) * 0.2);
+      bones.spine.rotation = rotation(-0.5);
+      bones.chest.rotation = rotation(-0.3, -0.12);
+      bones.upperChest.rotation = rotation(-0.38);
+      bones.rightShoulder = { rotation: rotation(0, -0.95) };
+      const headView = inverse.clone().multiply(clothFrame).multiply(new Q().setFromAxisAngle(X, -0.55));
+      const gazeTurn = bodyPoint("upperChest", bones, body).q.clone().invert().multiply(headView);
+      bones.neck.rotation = new Q().slerp(gazeTurn, 0.2).toArray();
+      const neck = bodyPoint("neck", bones, body);
+      bones.head.rotation = neck.q.clone().invert().multiply(headView).toArray();
+      const headFrame = bodyPoint("head", bones, body);
+      const chin = headFrame.p.clone().add(new V(0, -0.03 * height, -0.035 * height).applyQuaternion(headFrame.q)).applyQuaternion(player.quaternion).add(player.position);
+      const sight = headFrame.p.clone().add(new V(...measurements.sight).sub(new V(...body.head)).applyQuaternion(headFrame.q)).applyQuaternion(player.quaternion).add(player.position);
+      const shaft = pivot.clone().addScaledVector(cueDirection, chin.clone().sub(pivot).dot(cueDirection));
+      const shift = across.clone().multiplyScalar(-sight.clone().sub(pivot).dot(across));
+      shift.y = shaft.y + 0.012 - chin.y + Math.max(0, contactPosition.y - pivot.y) * 0.4;
+      hipsOffset.add(shift.applyQuaternion(inverse));
+      bones.hips.position = hipsOffset.toArray();
+      const hipFrame = bodyPoint("hips", bones, body);
+      const forward = alongCue.clone().applyQuaternion(inverse);
+      const lateral = across.clone().applyQuaternion(inverse);
+      const width = Math.max(0.36, Math.abs(body.rightUpperArm[0] - body.hips[0]) * 2.1);
+      for (const side of ["left", "right"]) {
+        const upper = new V(...body[side + "UpperLeg"]);
+        const lower = new V(...body[side + "LowerLeg"]);
+        const ankle = new V(...body[side + "Foot"]);
+        const thigh = lower.clone().sub(upper), shin = ankle.clone().sub(lower);
+        const a = thigh.length(), b = shin.length();
+        const hip = upper.clone().sub(new V(...body.hips)).applyQuaternion(hipFrame.q).add(hipFrame.p);
+        const target = forward.clone().multiplyScalar(step + (side === "left" ? 0.12 : -0.08)).addScaledVector(lateral, width * (side === "left" ? -0.5 : 0.5));
+        target.y = ankle.y;
+        const horizontal = target.clone().sub(hip);
+        horizontal.y = 0;
+        const maxHorizontal = Math.sqrt(Math.max(0, (a + b - 3e-3) ** 2 - (hip.y - target.y) ** 2));
+        if (horizontal.length() > maxHorizontal) {
+          horizontal.setLength(maxHorizontal);
+          target.x = hip.x + horizontal.x;
+          target.z = hip.z + horizontal.z;
+        }
+        const direction = target.clone().sub(hip);
+        const span = direction.length();
+        direction.normalize();
+        const along = Math.max(0, Math.min(a, (a * a - b * b + span * span) / (2 * span)));
+        const pole = forward.clone().addScaledVector(lateral, side === "left" ? -0.2 : 0.2);
+        pole.addScaledVector(direction, -pole.dot(direction)).normalize();
+        const kneePoint = hip.clone().addScaledVector(direction, along).addScaledVector(pole, Math.sqrt(Math.max(0, a * a - along * along)));
+        const thighRotation = new Q().setFromUnitVectors(thigh.normalize(), kneePoint.clone().sub(hip).normalize());
+        const shinRotation = new Q().setFromUnitVectors(shin.normalize(), target.clone().sub(kneePoint).normalize());
+        bones[side + "UpperLeg"].rotation = hipFrame.q.clone().invert().multiply(thighRotation).toArray();
+        bones[side + "LowerLeg"].rotation = thighRotation.clone().invert().multiply(shinRotation).toArray();
+        const footFrame = inverse.clone().multiply(clothFrame).multiply(new Q().setFromAxisAngle(Y, side === "left" ? -0.15 : -0.65));
+        bones[side + "Foot"].rotation = shinRotation.invert().multiply(footFrame).toArray();
+      }
+      const shoulder = bodyPoint("rightUpperArm", bones, body).p.applyQuaternion(player.quaternion).add(player.position);
+      const contactCenter = pivot.clone().addScaledVector(cueDirection, -0.735 - 0.028575);
+      const up2 = UP.clone().addScaledVector(cueDirection, -UP.dot(cueDirection)).normalize();
+      const outward = up2.clone().cross(cueDirection.clone().negate()).normalize();
+      const elbow = contactCenter.clone().addScaledVector(outward, 0.034 * (measurements.handWidth ?? 0.061071) / 0.061071).addScaledVector(up2, 0.09 * (measurements.palmLength ?? 0.091586) / 0.091586).addScaledVector(UP, measurements.gripLowerLength);
+      const delta2 = elbow.sub(shoulder), projection = delta2.dot(cueDirection);
+      const discriminant = measurements.gripUpperLength ** 2 - delta2.lengthSq() + projection ** 2;
+      if (discriminant >= 0) gripOffset = Math.max(-0.68, Math.min(
+        0.1,
+        -projection - Math.sqrt(discriminant)
+      ));
+      gripPole.copy(UP).applyQuaternion(inverse);
+    }
+    const grip = cuePosition.clone().addScaledVector(cueDirection, gripOffset);
+    const bridge = pivot.clone().addScaledVector(alongCue, -bridgeDistance * Math.hypot(cueDirection.x, cueDirection.z)).addScaledVector(across, -bridgeWidth * 0.62);
     bridge.y = contactPosition.y - 0.028575 + 0.035 * bridgeScale;
     const back = cueDirection.clone().negate();
     const wristUp = UP.clone().addScaledVector(cueDirection, -UP.dot(cueDirection)).normalize();
@@ -1901,10 +2172,58 @@
     ]) {
       gripFingers["Thumb" + segment] = gripRotation.clone().multiply(new Q().setFromAxisAngle(Z, spread)).multiply(new Q().setFromAxisAngle(Y, angle)).toArray();
     }
-    const bridgeRotation = inverse.clone().multiply(
-      new Q().setFromUnitVectors(FORWARD, alongCue)
-    );
+    const railRotation = railFrame.clone().multiply(new Q().setFromAxisAngle(X, railTopBridge || railSlideBridge ? 0 : Math.PI / 2));
+    const handWorld = clothFrame.clone().slerp(railRotation, railBlend);
+    const bridgeRotation = inverse.clone().multiply(handWorld);
     const fingers = {};
+    for (const [segment, lift, openSpread, railSpread] of [
+      ["Metacarpal", 0.5, -0.27 - 0.29 * bridgeThumbScale, -0.5 - 0.06 * bridgeThumbScale],
+      ["Proximal", 0.15, -0.2, -0.35],
+      ["Distal", 0.1, -0.15, -0.45]
+    ]) {
+      const open = clothFrame.clone().multiply(
+        new Q().setFromEuler(new E(
+          lift,
+          openSpread,
+          0
+        ))
+      );
+      const rail = railRotation.clone().multiply(
+        new Q().setFromEuler(new E(railTopBridge ? lift : 0.1, railTopBridge ? openSpread : railSpread, 0))
+      );
+      const thumbFrame = railSlideBridge ? clothFrame.clone().multiply(
+        new Q().setFromEuler(new E(
+          0,
+          segment === "Metacarpal" ? -0.5 : segment === "Proximal" ? -0.8 : -0.5,
+          0
+        ))
+      ) : open.slerp(rail, railBlend);
+      fingers["Thumb" + segment] = inverse.clone().multiply(thumbFrame).toArray();
+    }
+    if (railNormal || compactBridge) {
+      const index = new V(...measurements.bridgeIndex ?? [0.38 * bridgeWidth, -3e-3 * bridgeScale, -0.087 * bridgeScale]).applyQuaternion(handWorld);
+      const thumb = new V(...measurements.bridgeThumb ?? [0.375 * bridgeWidth, -0.014 * bridgeScale, -0.037 * bridgeScale]).applyQuaternion(handWorld);
+      const lengths = measurements.bridgeThumbLengths ?? [0.03 * bridgeScale, 0.027 * bridgeScale];
+      for (const [i, segment] of ["Metacarpal", "Proximal"].entries()) {
+        const frame = new Q(...fingers["Thumb" + segment]).premultiply(player.quaternion);
+        thumb.addScaledVector(FORWARD.clone().applyQuaternion(frame), lengths[i]);
+      }
+      const groove = index.lerp(thumb, 0.5);
+      if (compactBridge) groove.y = Math.min(groove.y, 0);
+      groove.y += (compactBridge ? 1e-3 : 4e-3) * bridgeScale;
+      const supportDistance = compactBridge ? -bridgeDistance + groove.dot(alongCue) : railTopBridge ? Math.min(
+        -bridgeDistance,
+        (contactPosition.y - 0.028575 + 0.054 + 0.025 * bridgeScale + groove.y - pivot.y) / cueDirection.y
+      ) : sideBridge.clone().sub(pivot).add(groove).dot(railNormal) / cueDirection.dot(railNormal);
+      bridge.copy(pivot).addScaledVector(cueDirection, supportDistance).sub(groove);
+      if (railSlideBridge) {
+        bridge.copy(pivot).addScaledVector(alongCue, -railSupportDistance).addScaledVector(across, -((measurements.bridgeThumb?.[0] ?? bridgeWidth * 0.375) + 0.011 * bridgeScale));
+        bridge.y = contactPosition.y - 0.028575 + 0.0433 + 0.03 * bridgeScale + 0.014 * (1 - bridgeThumbScale);
+      }
+    }
+    const palmUp = UP.clone().applyQuaternion(handWorld);
+    const palmForward = FORWARD.clone().applyQuaternion(handWorld);
+    const palmAcross = X.clone().applyQuaternion(handWorld);
     for (const finger of ["Index", "Middle", "Ring", "Little"]) {
       const spread = { Index: -0.08, Middle: 0, Ring: 0.16, Little: 0.32 }[finger];
       const base = measurements.bridgeFingers?.[finger] ?? { height: 0, length: 0.032 * bridgeScale };
@@ -1914,27 +2233,43 @@
         (0.035 * bridgeScale + base.height - padHeight) / base.length
       )));
       for (const segment of ["Proximal", "Intermediate", "Distal"]) {
-        fingers[finger + segment] = bridgeRotation.clone().multiply(new Q().setFromEuler(new E(segment === "Proximal" ? -curl : 0, spread, 0, "YXZ"))).toArray();
+        const open = clothFrame.clone().multiply(new Q().setFromEuler(new E(segment === "Proximal" ? -curl : 0, spread, 0, "YXZ")));
+        const palmLength = base.palmLength ?? 0.091586 * bridgeScale * { Index: 0.92, Middle: 1, Ring: 0.98, Little: 0.81 }[finger];
+        const rootHeight = bridge.y + palmLength * palmForward.y + base.height * palmUp.y + (base.side ?? 0) * palmAcross.y;
+        const railCurl = sideBridge ? Math.asin(Math.max(-0.95, Math.min(
+          0.95,
+          (rootHeight - (contactPosition.y - 0.028575 + 0.054) - padHeight) / base.length
+        ))) : 0;
+        const railSpread = { Index: 0.3, Middle: 0, Ring: 0.05, Little: 0.1 }[finger];
+        const folded = railFrame.clone().multiply(new Q().setFromEuler(
+          new E(segment === "Proximal" ? -railCurl : 0, railSpread, 0, "YXZ")
+        ));
+        let frame = open.slerp(folded, railBlend);
+        if (compactBridge) {
+          const outerLength = base.outerLength ?? 0.045 * bridgeScale;
+          const rootHeight2 = bridge.y + base.height;
+          const raised = 0.35;
+          const down = Math.asin(Math.max(0.1, Math.min(
+            0.98,
+            (rootHeight2 + base.length * Math.sin(raised) - 6e-3 * bridgeScale) / outerLength
+          )));
+          frame = clothFrame.clone().multiply(new Q().setFromEuler(new E(
+            segment === "Proximal" ? raised : -down,
+            { Index: 0.3, Middle: 0, Ring: 0.08, Little: 0.16 }[finger],
+            0,
+            "YXZ"
+          )));
+        } else if (railSlideBridge) {
+          const slideSpread = finger === "Index" ? segment === "Proximal" ? -0.9 : -0.15 : spread;
+          const slideCurl = finger === "Index" ? segment === "Proximal" ? 0.15 : segment === "Intermediate" ? -1.15 : -0.25 : segment === "Proximal" ? -railCurl : 0;
+          frame = clothFrame.clone().multiply(new Q().setFromEuler(new E(slideCurl, slideSpread, 0, "YXZ")));
+        }
+        fingers[finger + segment] = inverse.clone().multiply(frame).toArray();
       }
     }
-    for (const [segment, lift] of [["Metacarpal", 0.5], ["Proximal", 0.15], ["Distal", 0.1]]) {
-      fingers["Thumb" + segment] = bridgeRotation.clone().multiply(new Q().setFromEuler(new E(lift, -0.03, 0))).toArray();
-    }
     return {
-      bones: {
-        hips: { rotation: rotation(-lean), position: hipsOffset.toArray() },
-        spine: { rotation: rotation(-0.25) },
-        chest: { rotation: rotation(-0.18, -0.08) },
-        upperChest: { rotation: rotation(-0.08) },
-        neck: { rotation: rotation(0.5) },
-        head: { rotation: rotation(0.55, 0.08) },
-        leftUpperLeg: { rotation: upperLeg(0.05, -0.08) },
-        leftLowerLeg: { rotation: rotation(-knee) },
-        leftFoot: { rotation: foot(0.08) },
-        rightUpperLeg: { rotation: upperLeg(-0.08, 0.08) },
-        rightLowerLeg: { rotation: rotation(-knee) },
-        rightFoot: { rotation: foot(-0.1) }
-      },
+      bridgeType,
+      bones,
       hands: {
         left: {
           kind: "hand",
@@ -1979,9 +2314,11 @@
     world2.on(volumeEvent, (value) => sounds.setVolume(value));
     app2.emit(`${volumeEvent}:request`);
     let poseMeasurements = null, savedCamera = null, cameraHold = null;
+    let aimCuePosition = null, aimCueAcross = null;
     let aimCameraPosition = null, aimCameraTarget = null, strokePlayback = null, completedStrokeId = -1;
     const riseDuration = 1;
     let aimEntry = null, posedBody = false, poseEntryAt = null, aimCameraPending = false;
+    let posedBridgeType = null, cueEntryUntil = 0;
     let soundEvents = [], lastEventId = latest?.lastEventId || 0;
     const cueEvent = CUE_EVENT;
     const aimingEvent = `billard:aiming:${playChannel}`;
@@ -2063,9 +2400,12 @@
         if (posedPlayer === me.id && cameraHold) returnCamera();
       }
       poseMeasurements = null;
+      aimCuePosition = aimCueAcross = null;
       posedPlayer = null;
       posedBody = false;
       poseEntryAt = null;
+      posedBridgeType = null;
+      cueEntryUntil = 0;
     };
     const releaseStroke = () => {
       if (!cameraHold?.holding) return;
@@ -2298,6 +2638,8 @@
           camera.position.addScaledVector(axis, (leftEye ? 0.06 : 0.03) * height / 1.7);
         }
       }
+      if (aimCuePosition && aimCueAcross)
+        camera.position.addScaledVector(aimCueAcross, aimCuePosition.clone().sub(camera.position).dot(aimCueAcross));
       const look = target.clone().sub(camera.position);
       camera.quaternion.setFromEuler(new E(
         Math.atan2(look.y, Math.hypot(look.x, look.z)),
@@ -2494,6 +2836,7 @@ Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
           poseMeasurements = null;
           posedBody = false;
           poseEntryAt = null;
+          posedBridgeType = null;
         }
         if (!poseMeasurements) poseMeasurements = playerMeasurements(player);
         posedPlayer = actor;
@@ -2501,20 +2844,30 @@ Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
         const cuePosition = worldPosition(pose.cuePosition);
         const cueQuaternion = app2.quaternion.clone().multiply(pose.cueQuaternion);
         const predicted = actor === me.id && (control || cameraHold) && aimStance;
-        const avatarPose = playerAimPose(
+        const { bridgeType, ...avatarPose } = playerAimPose(
           predicted || player,
           cuePosition,
           cueQuaternion,
           worldPosition(pose.cameraTarget),
-          poseMeasurements
+          poseMeasurements,
+          { position: app2.position, quaternion: app2.quaternion, size }
         );
+        if (actor === me.id && poseMeasurements.body) {
+          aimCuePosition = cuePosition.clone();
+          aimCueAcross = new V(0, 1, 0).applyQuaternion(cueQuaternion).cross(cameraUp).normalize();
+        }
         if (predicted) avatarPose.root = {
           position: predicted.position.toArray(),
           quaternion: predicted.quaternion.toArray()
         };
         const entering = !posedBody && !stroke;
         const earlyShot = stroke && (actor === me.id && !posedBody || poseEntryAt !== null && clock - poseEntryAt < riseDuration);
-        player.setPose?.(avatarPose, { duration: entering ? riseDuration : earlyShot ? 0.1 : 0 });
+        const bridgeChanged = posedBridgeType !== null && posedBridgeType !== bridgeType && !stroke;
+        if (entering) cueEntryUntil = clock + riseDuration;
+        else if (earlyShot) cueEntryUntil = clock + 0.1;
+        if (bridgeChanged) cueEntryUntil = 0;
+        player.setPose?.(avatarPose, { duration: entering ? riseDuration : earlyShot ? 0.1 : bridgeChanged ? 0.5 : 0 });
+        posedBridgeType = bridgeType;
         if (entering) poseEntryAt = clock;
         if (stroke) poseEntryAt = null;
         posedBody = true;
@@ -2522,7 +2875,8 @@ Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
           playerId: actor,
           tableId: app2.instanceId,
           position: cuePosition.toArray(),
-          quaternion: cueQuaternion.toArray()
+          quaternion: cueQuaternion.toArray(),
+          followGrip: clock < cueEntryUntil
         });
       } else if (control && latest?.scratched && aimStance) {
         posedPlayer = me.id;

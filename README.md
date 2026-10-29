@@ -180,9 +180,20 @@ advances with the shoulders and stays planted throughout the stroke. For longer
 reaches, the grip moves toward the cue's butt and the bridge length grows while
 leaving clearance for follow-through. The shooter's existing right-eye camera
 follows the solved body, and observers see the same stance. Measured palm length
-and finger width fit both hands to the shaft. The bridge wrist stays at a fixed height above the cloth, independent of spin.
+and finger width fit both hands to the shaft. The normal bridge wrist stays at a fixed height above the cloth, independent of spin.
 Measured finger lengths lower the first joints; both outer segments stay horizontal
-with their pads on the surface. The raised thumb forms the open groove beside the index finger. A slight body turn places
+with their pads on the surface. The normal bridge remains selected while its heel and
+spread fingers fit on the cloth. When space gets tight, a compact cloth bridge shortens
+the hand's footprint and bends the outer fingers steeply onto the playing surface.
+If that no longer fits, a rail bridge lays the shaft directly on the rail, with the
+thumb beside it and the index arched over it. The outside-face bridge is reserved for
+balls almost against the cushion; shots running along a rail retain the raised open
+bridge. Each change selects a complete pose and uses the native 500 ms transition,
+which finishes even when the aim stops moving. Placement stays anchored to the cue
+line on diagonal and corner shots.
+The rail forms follow [Mark Finkelstein's reference photographs](https://www.pooldawg.com/article/proper-form-for-bridging-on-the-rail/)
+and [Jacob Parrent's bridge guide](https://www.worldofpoolandbilliards.com/post/the-bridge-in-pool).
+A slight body turn places
 the bridge shoulder forward and the grip shoulder back. The bridge hand reaches
 ahead of its elbow, and the grip elbow bends upward with a slight outward bias
 for deeper shots, keeping it outside the torso throughout follow-through. Wider

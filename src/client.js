@@ -30,9 +30,11 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   world.on(volumeEvent, value => sounds.setVolume(value))
   app.emit(`${volumeEvent}:request`)
   let poseMeasurements = null, savedCamera = null, cameraHold = null
+  let aimCuePosition = null, aimCueAcross = null
   let aimCameraPosition = null, aimCameraTarget = null, strokePlayback = null, completedStrokeId = -1
   const riseDuration = 1
   let aimEntry = null, posedBody = false, poseEntryAt = null, aimCameraPending = false
+  let posedBridgeType = null, cueEntryUntil = 0
   let soundEvents = [], lastEventId = latest?.lastEventId || 0
   const cueEvent = CUE_EVENT
   const aimingEvent = `billard:aiming:${playChannel}`
@@ -111,9 +113,12 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       if (posedPlayer === me.id && cameraHold) returnCamera()
     }
     poseMeasurements = null
+    aimCuePosition = aimCueAcross = null
     posedPlayer = null
     posedBody = false
     poseEntryAt = null
+    posedBridgeType = null
+    cueEntryUntil = 0
   }
   const releaseStroke = () => {
     if (!cameraHold?.holding) return
@@ -320,6 +325,10 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         camera.position.addScaledVector(axis, (leftEye ? 0.06 : 0.03) * height / 1.7)
       }
     }
+    // Standing animation can bias the captured body measurements sideways.
+    // Retain the rendered eye height and reach, but sight over the actual shaft.
+    if (aimCuePosition && aimCueAcross)
+      camera.position.addScaledVector(aimCueAcross, aimCuePosition.clone().sub(camera.position).dot(aimCueAcross))
     const look = target.clone().sub(camera.position)
     camera.quaternion.setFromEuler(new Euler(
       Math.atan2(look.y, Math.hypot(look.x, look.z)), Math.atan2(-look.x, -look.z), 0, 'YXZ'))
@@ -485,6 +494,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         poseMeasurements = null
         posedBody = false
         poseEntryAt = null
+        posedBridgeType = null
       }
       if (!poseMeasurements) poseMeasurements = playerMeasurements(player)
       posedPlayer = actor
@@ -492,19 +502,30 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       const cuePosition = worldPosition(pose.cuePosition)
       const cueQuaternion = app.quaternion.clone().multiply(pose.cueQuaternion)
       const predicted = actor === me.id && (control || cameraHold) && aimStance
-      const avatarPose = playerAimPose(predicted || player, cuePosition, cueQuaternion,
-        worldPosition(pose.cameraTarget), poseMeasurements)
+      const { bridgeType, ...avatarPose } = playerAimPose(predicted || player, cuePosition, cueQuaternion,
+        worldPosition(pose.cameraTarget), poseMeasurements, { position: app.position, quaternion: app.quaternion, size })
+      if (actor === me.id && poseMeasurements.body) {
+        aimCuePosition = cuePosition.clone()
+        aimCueAcross = new Vector3(0, 1, 0).applyQuaternion(cueQuaternion).cross(cameraUp).normalize()
+      }
       if (predicted) avatarPose.root = { position: predicted.position.toArray(),
         quaternion: predicted.quaternion.toArray() }
       const entering = !posedBody && !stroke
       const earlyShot = stroke && ((actor === me.id && !posedBody) ||
         (poseEntryAt !== null && clock - poseEntryAt < riseDuration))
-      player.setPose?.(avatarPose, { duration: entering ? riseDuration : earlyShot ? 0.1 : 0 })
+      // Start the native timer once at a bridge change. Later aim updates keep
+      // its destination current without making progress depend on the angle.
+      const bridgeChanged = posedBridgeType !== null && posedBridgeType !== bridgeType && !stroke
+      if (entering) cueEntryUntil = clock + riseDuration
+      else if (earlyShot) cueEntryUntil = clock + 0.1
+      if (bridgeChanged) cueEntryUntil = 0
+      player.setPose?.(avatarPose, { duration: entering ? riseDuration : earlyShot ? 0.1 : bridgeChanged ? 0.5 : 0 })
+      posedBridgeType = bridgeType
       if (entering) poseEntryAt = clock
       if (stroke) poseEntryAt = null
       posedBody = true
       app.emit(poseEvent, { playerId: actor, tableId: app.instanceId,
-        position: cuePosition.toArray(), quaternion: cueQuaternion.toArray() })
+        position: cuePosition.toArray(), quaternion: cueQuaternion.toArray(), followGrip: clock < cueEntryUntil })
     } else if (control && latest?.scratched && aimStance) {
       posedPlayer = me.id
       me.setPose?.({ root: { position: aimStance.position.toArray(),

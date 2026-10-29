@@ -177,11 +177,12 @@ function updateHeldCues() {
     if (pose) {
       cues[i].position.fromArray(pose.position)
       cues[i].quaternion.fromArray(pose.quaternion)
-      // Attach the aiming grip to the rendered wrist while the body lowers.
-      // The destination wrist preserves the exact hand-to-cue fit when entry ends.
+      // Follow the wrist during the initial descent. Bridge morphs keep the cue
+      // on the table's shot line instead of rotating it with the animated grip.
+      // Events without this flag retain their existing entry behavior.
       const handDelta = player.getBoneTransform?.('rightHand', { targetPose: true })?.clone().invert()
       const hand = player.getBoneTransform?.('rightHand')
-      if (handDelta && hand) {
+      if (pose.followGrip !== false && handDelta && hand) {
         handDelta.premultiply(hand)
         cues[i].position.applyMatrix4(handDelta)
         cues[i].quaternion.premultiply(new Quaternion().setFromRotationMatrix(handDelta))
