@@ -50,6 +50,17 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
     const bone = name => new THREE.Vector3().setFromMatrixPosition(instance.getBoneTransform(name))
       .sub(position).applyQuaternion(cueFrame.clone().invert())
     const beforeFoot = bone('leftFoot')
+    // Shoes can tuck beneath the apron. Check the visible table meshes rather
+    // than the capsule's floor-to-rail collision box, which fills that space.
+    const tableBytes = await fs.readFile(new URL('../../upstream-table/model.glb', import.meta.url))
+    const table = await loader.parseAsync(tableBytes.buffer.slice(tableBytes.byteOffset,
+      tableBytes.byteOffset + tableBytes.byteLength), '')
+    table.scene.position.y = -.708
+    table.scene.updateMatrixWorld(true)
+    const tableBounds = []
+    table.scene.traverse(mesh => {
+      if (mesh.isMesh) tableBounds.push(new THREE.Box3().setFromObject(mesh).expandByScalar(.002))
+    })
     const upperLength = bone('rightUpperArm').distanceTo(bone('rightLowerArm'))
     const lowerLength = bone('rightLowerArm').distanceTo(bone('rightHand'))
     const worldBone = name => new THREE.Vector3().setFromMatrixPosition(instance.getBoneTransform(name))
@@ -158,8 +169,8 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
           point.fromBufferAttribute(mesh.geometry.attributes.position, i)
           mesh.applyBoneTransform(i, point).applyMatrix4(mesh.matrixWorld)
           point.sub(position).applyQuaternion(cueFrame.clone().invert()).add(stance.position)
-          assert.ok(!(Math.abs(point.x) < 1.36 && Math.abs(point.z) < .765 &&
-            point.y > -.708 && point.y < .055), 'body skin clears the table and rail')
+          assert.ok(tableBounds.every(bounds => !bounds.containsPoint(point)),
+            'body skin clears the actual table meshes')
         }
       }
     }
@@ -170,6 +181,7 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
     const torsoNames = new Set(['hips', 'spine', 'chest', 'upperChest'].map(name =>
       glb.userData.vrm.humanoid.getRawBoneNode(name)?.name))
     const torsoVertices = bodyVertices.filter(vertex => torsoNames.has(vertex.name))
+    const ordinaryFeet = Object.fromEntries(['left', 'right'].map(side => [side, worldBone(side + 'Foot')]))
     // A farther ball must bring the body and planted bridge over the rail,
     // rather than leave the native wrists clamped short of the physical cue.
     for (const [deepBall, deepAngle] of [
@@ -177,6 +189,8 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
       [[0, .35, 0], Math.PI / 2], [[0, .42, 0], Math.PI / 2], [[0, .5, 0], Math.PI / 2],
       [[0, .48, 0], Math.PI / 2], [[0, -.48, 0], 1.5 * Math.PI],
       [[0, 0, 0], 0], [[0, 0, 0], Math.PI],
+      [[0, 0, 0], Math.PI / 4], [[0, 0, 0], 3 * Math.PI / 4],
+      [[0, 0, 0], 5 * Math.PI / 4], [[0, 0, 0], 7 * Math.PI / 4],
     ]) {
       const deepStance = physics.avatarStance(deepBall, deepAngle, physics.dimensions('8'),
         -0.708, measurements.cueOffset)
@@ -209,9 +223,11 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
           assert.ok(heldCue.quaternion.angleTo(cueQuaternion) < 1e-6,
             'real rack cue keeps the shot direction during a deep bend')
           const hips = toTable(worldBone('hips'))
-          assert.ok(hips.clone().sub(deepStance.position).dot(forward) > .05,
-            'rendered hips advance over the rail for a deeper ball')
-          assert.ok(hips.y > .15, 'hips rise enough to clear the rail')
+          if (deepStance.distance > 1.3) {
+            assert.ok(hips.clone().sub(deepStance.position).dot(forward) > .05,
+              'rendered hips advance over the rail for a deeper ball')
+            assert.ok(hips.y > .15, 'hips rise enough to clear the rail')
+          }
           for (const side of ['left', 'right']) {
             const target = new THREE.Vector3(...deepPose.hands[side].p)
               .applyQuaternion(quaternion).add(position)
@@ -219,6 +235,11 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
               `${side} wrist reaches the real cue at ${deepStance.distance.toFixed(2)} m, ${deepSpeed} m/s, ${time}s, spin ${deepSide}/${deepTop}: ${(worldBone(side + 'Hand').distanceTo(target) * 1000).toFixed(1)} mm`)
             assert.ok(Math.abs(worldBone(side + 'Foot').y - position.y - beforeFoot.y) < .025,
               'feet remain grounded while the body advances')
+            const footStep = toTable(worldBone(side + 'Foot')).sub(toTable(ordinaryFeet[side])).dot(forward)
+            if (deepStance.distance > 1.3)
+              assert.ok(footStep > .025, `feet step closer to the rail for a far ball: ${side}, ${footStep}, ${deepStance.distance}, angle ${deepAngle}`)
+            if (deepStance.distance > 1.6)
+              assert.ok(footStep > .1, 'deep reach brings the feet at least 10 cm closer')
           }
           const wrist = worldBone('leftHand')
           if (!planted) planted = wrist.clone()
@@ -246,12 +267,12 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
             assert.ok(clearance > .035,
               `grip forearm clears torso at ${deepStance.distance.toFixed(2)} m, ${deepSpeed} m/s, ${time}s, spin ${deepSide}/${deepTop}: ${(clearance * 1000).toFixed(1)} mm, sample ${sample}`)
           }
-          for (const { mesh, i } of bodyVertices) {
+          for (const { mesh, i, name } of bodyVertices) {
             point.fromBufferAttribute(mesh.geometry.attributes.position, i)
             mesh.applyBoneTransform(i, point).applyMatrix4(mesh.matrixWorld)
             point.copy(toTable(point))
-            assert.ok(!(Math.abs(point.x) < 1.36 && Math.abs(point.z) < .765 &&
-              point.y > -.708 && point.y < .055), 'deep body skin clears the table and rail')
+            assert.ok(tableBounds.every(bounds => !bounds.containsPoint(point)),
+              `deep body skin clears the table meshes: ${name}, ${point.toArray()}, ball ${deepBall}, angle ${deepAngle}, ${deepSpeed} m/s, ${time}s`)
           }
         }
       }

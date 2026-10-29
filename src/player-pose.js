@@ -63,16 +63,21 @@ export function playerAimPose(player, cuePosition, cueQuaternion, contactPositio
   const cueDirection = UP.clone().applyQuaternion(cueQuaternion)
   const { height, hipsY, footY } = measurements
   const alongCue = new Vector3(cueDirection.x, 0, cueDirection.z).normalize()
-  const distance = contactPosition.clone().sub(player.position).dot(alongCue)
+  const capsuleDistance = contactPosition.clone().sub(player.position).dot(alongCue)
+  // The collision capsule is wider than the legs. Step the posed feet closer
+  // for a far ball, keeping the authoritative capsule outside the furniture.
+  const step = Math.min(0.14, Math.max(0, capsuleDistance - 1.2) * 0.5)
+  const distance = capsuleDistance - step
   const extraReach = Math.max(0, distance - 1.2)
   const bodyClearance = Math.max(0, Math.min(0.06, ((measurements.cueOffset ?? 0.24) - 0.24) * 0.9)) *
-    Math.min(1, extraReach / 0.25)
+    Math.min(1, (extraReach + step) / 0.08)
   const clothY = local(contactPosition).y - 0.028575
   const legSpan = Math.max(0.3, hipsY - footY)
-  // Advance only the posed hips; the authoritative capsule stays outside the
-  // table. Raising them as the knees straighten clears the rail and apron.
-  const baseLegHeight = Math.max(legSpan * 0.6, Math.min(legSpan, clothY + 0.16 - footY))
+  // Raise the hips as the closer step and forward lean straighten the knees,
+  // keeping the thighs clear of the rail and apron.
   const risePerAdvance = 0.6
+  const baseLegHeight = Math.max(legSpan * 0.6,
+    Math.min(legSpan, clothY + 0.16 - footY + step * risePerAdvance))
   const slopeSquared = 1 + risePerAdvance * risePerAdvance
   // (baseLegHeight + risePerAdvance * advance)^2 + advance^2 <= legSpan^2.
   const maxAdvance = (Math.sqrt(slopeSquared * legSpan * legSpan - baseLegHeight * baseLegHeight) -
@@ -83,7 +88,7 @@ export function playerAimPose(player, cuePosition, cueQuaternion, contactPositio
   const knee = 2 * Math.acos(Math.min(1, Math.hypot(legHeight, advance) / legSpan))
   // Bring the chest lower over the cloth as the hips advance for a far ball.
   const lean = Math.max(0.65, Math.min(1.2, 1 + (height - 1.6686) * 0.4)) + advance
-  const hipsOffset = alongCue.clone().applyQuaternion(inverse).multiplyScalar(advance)
+  const hipsOffset = alongCue.clone().applyQuaternion(inverse).multiplyScalar(advance + step)
   hipsOffset.y = legHeight - legSpan - 0.028 * height / 1.6686
   // Counter the hips' advance with backward-sloping legs and level feet,
   // using the same normalized bone rotations as the ordinary shooting stance.
@@ -97,25 +102,26 @@ export function playerAimPose(player, cuePosition, cueQuaternion, contactPositio
   // Preserve the ordinary grip while the body can advance. For longer reaches,
   // move it toward the butt, as in the PoolDawg reference. A taller avatar
   // can grip up to 0.6 m behind the cue center, leaving 13.5 cm of shaft.
+  // The closer, raised body needs the grip slightly forward for the backswing.
   const gripLimit = Math.max(-0.6, Math.min(-0.5, -0.5 - (height - 1.6686)))
   const gripOffset = Math.max(gripLimit,
     Math.max(-0.40, Math.min(-0.08, -0.28 + (height - 1.8256) * 0.85)) -
       Math.min(0.2, (extraReach - advance) * 0.5) -
-      Math.min(0.2, Math.max(0, distance - 1.4)))
+      Math.min(0.2, Math.max(0, distance - 1.4)) + Math.max(0, step - 0.01) * 0.7)
   const grip = cuePosition.clone().addScaledVector(cueDirection, gripOffset)
   // Extend the bridge arm in front of the shoulder. Short avatars need a longer
   // bridge; a bridge hand beside the chest folds the arm across the body.
   const reach = 0.93 + (height - 1.8256) * 1.4
   // Advance the planted bridge with the shoulders, allowing for body clearance.
-  // Longer bridges leave room
-  // for the rear grip: 0.735 m half-cue minus 0.13 m follow-through and clearance.
-  const bridgeDistance = Math.max(0.23, Math.min(0.97, 0.475 - gripOffset, distance - reach - advance * 0.7 + bodyClearance * 0.3))
+  // Longer bridges leave room for the rear grip: 0.735 m half-cue minus 0.13 m follow-through and clearance.
+  const bridgeDistance = Math.max(0.23, Math.min(1, 0.495 - gripOffset,
+    distance - reach - advance * 0.7 + bodyClearance * 0.7 + step * 0.4))
   // Anchor to the shaft's line, so side/top spin and the moving cue never
   // leave the bridge behind. The wrist sits beside the thumb/index groove.
   const across = new Vector3(-cueDirection.z, 0, cueDirection.x).normalize()
   // Bias the elbow slightly outside when reaching in. A straight-up pole
   // becomes ambiguous as the follow-through puts the wrist below the shoulder.
-  const gripPole = across.clone().applyQuaternion(inverse).multiplyScalar(Math.min(0.25, extraReach))
+  const gripPole = across.clone().applyQuaternion(inverse).multiplyScalar(Math.min(0.25, extraReach + step))
   gripPole.y = 1
   // A wider torso also needs room beside the cue during deep reach.
   // Shift the posed body, preserving the capsule and the planted bridge.

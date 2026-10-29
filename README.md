@@ -166,14 +166,15 @@ follows the cue. Existing avatar height and bone measurements adapt the crouch,
 and shoulder width keeps the cue outside the torso. The crouch keeps the torso
 above the rail. When the ball is farther inside the table, the hips advance and
 rise, the knees straighten and the body bends progressively lower over the
-cloth. The
-collision capsule stays outside the table; normalized leg rotations keep the
-feet near their grounded positions without stretching the legs. The bridge
+cloth. For distant shots, the pose adds a step of up to 14 cm toward the
+rail, allowing the shoes to tuck beneath the apron. The collision capsule stays
+outside the table; normalized leg rotations keep the feet grounded without
+stretching the legs. The bridge
 advances with the shoulders and stays planted throughout the stroke. For longer
 reaches, the grip moves toward the cue's butt and the bridge length grows while
 leaving clearance for follow-through. The shooter's existing right-eye camera
-follows the solved body, and observers see the same stance. Measured palm length and finger width fit both hands to
-the shaft. The bridge wrist stays at a fixed height above the cloth, independent of spin.
+follows the solved body, and observers see the same stance. Measured palm length
+and finger width fit both hands to the shaft. The bridge wrist stays at a fixed height above the cloth, independent of spin.
 Measured finger lengths lower the first joints; both outer segments stay horizontal
 with their pads on the surface. The raised thumb forms the open groove beside the index finger. A slight body turn places
 the bridge shoulder forward and the grip shoulder back. The bridge hand reaches

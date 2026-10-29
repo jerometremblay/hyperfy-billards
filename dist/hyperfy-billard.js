@@ -1820,20 +1820,25 @@
     const cueDirection = UP.clone().applyQuaternion(cueQuaternion);
     const { height, hipsY, footY } = measurements;
     const alongCue = new V(cueDirection.x, 0, cueDirection.z).normalize();
-    const distance = contactPosition.clone().sub(player.position).dot(alongCue);
+    const capsuleDistance = contactPosition.clone().sub(player.position).dot(alongCue);
+    const step = Math.min(0.14, Math.max(0, capsuleDistance - 1.2) * 0.5);
+    const distance = capsuleDistance - step;
     const extraReach = Math.max(0, distance - 1.2);
-    const bodyClearance = Math.max(0, Math.min(0.06, ((measurements.cueOffset ?? 0.24) - 0.24) * 0.9)) * Math.min(1, extraReach / 0.25);
+    const bodyClearance = Math.max(0, Math.min(0.06, ((measurements.cueOffset ?? 0.24) - 0.24) * 0.9)) * Math.min(1, (extraReach + step) / 0.08);
     const clothY = local(contactPosition).y - 0.028575;
     const legSpan = Math.max(0.3, hipsY - footY);
-    const baseLegHeight = Math.max(legSpan * 0.6, Math.min(legSpan, clothY + 0.16 - footY));
     const risePerAdvance = 0.6;
+    const baseLegHeight = Math.max(
+      legSpan * 0.6,
+      Math.min(legSpan, clothY + 0.16 - footY + step * risePerAdvance)
+    );
     const slopeSquared = 1 + risePerAdvance * risePerAdvance;
     const maxAdvance = (Math.sqrt(slopeSquared * legSpan * legSpan - baseLegHeight * baseLegHeight) - risePerAdvance * baseLegHeight) / slopeSquared;
     const advance = Math.min(extraReach * 0.75, Math.max(0, maxAdvance) * 0.9);
     const legHeight = baseLegHeight + advance * risePerAdvance;
     const knee = 2 * Math.acos(Math.min(1, Math.hypot(legHeight, advance) / legSpan));
     const lean = Math.max(0.65, Math.min(1.2, 1 + (height - 1.6686) * 0.4)) + advance;
-    const hipsOffset = alongCue.clone().applyQuaternion(inverse).multiplyScalar(advance);
+    const hipsOffset = alongCue.clone().applyQuaternion(inverse).multiplyScalar(advance + step);
     hipsOffset.y = legHeight - legSpan - 0.028 * height / 1.6686;
     const legTilt = new Q().setFromAxisAngle(
       alongCue.clone().applyQuaternion(inverse).cross(UP).normalize(),
@@ -1844,13 +1849,17 @@
     const gripLimit = Math.max(-0.6, Math.min(-0.5, -0.5 - (height - 1.6686)));
     const gripOffset = Math.max(
       gripLimit,
-      Math.max(-0.4, Math.min(-0.08, -0.28 + (height - 1.8256) * 0.85)) - Math.min(0.2, (extraReach - advance) * 0.5) - Math.min(0.2, Math.max(0, distance - 1.4))
+      Math.max(-0.4, Math.min(-0.08, -0.28 + (height - 1.8256) * 0.85)) - Math.min(0.2, (extraReach - advance) * 0.5) - Math.min(0.2, Math.max(0, distance - 1.4)) + Math.max(0, step - 0.01) * 0.7
     );
     const grip = cuePosition.clone().addScaledVector(cueDirection, gripOffset);
     const reach = 0.93 + (height - 1.8256) * 1.4;
-    const bridgeDistance = Math.max(0.23, Math.min(0.97, 0.475 - gripOffset, distance - reach - advance * 0.7 + bodyClearance * 0.3));
+    const bridgeDistance = Math.max(0.23, Math.min(
+      1,
+      0.495 - gripOffset,
+      distance - reach - advance * 0.7 + bodyClearance * 0.7 + step * 0.4
+    ));
     const across = new V(-cueDirection.z, 0, cueDirection.x).normalize();
-    const gripPole = across.clone().applyQuaternion(inverse).multiplyScalar(Math.min(0.25, extraReach));
+    const gripPole = across.clone().applyQuaternion(inverse).multiplyScalar(Math.min(0.25, extraReach + step));
     gripPole.y = 1;
     hipsOffset.addScaledVector(
       across.clone().applyQuaternion(inverse),
