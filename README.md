@@ -164,17 +164,28 @@ through this fork's client-only `player.setPose` method. The body leans over the
 cue with bent knees; the open bridge stays on the cloth and the closed grip
 follows the cue. Existing avatar height and bone measurements adapt the crouch,
 and shoulder width keeps the cue outside the torso. The crouch keeps the torso
-above the rail, while measured palm length and finger width fit both hands to
+above the rail. When the ball is farther inside the table, the hips advance and
+rise, the knees straighten and the body bends progressively lower over the
+cloth. The
+collision capsule stays outside the table; normalized leg rotations keep the
+feet near their grounded positions without stretching the legs. The bridge
+advances with the shoulders and stays planted throughout the stroke. For longer
+reaches, the grip moves toward the cue's butt and the bridge length grows while
+leaving clearance for follow-through. The shooter's existing right-eye camera
+follows the solved body, and observers see the same stance. Measured palm length and finger width fit both hands to
 the shaft. The bridge wrist stays at a fixed height above the cloth, independent of spin.
 Measured finger lengths lower the first joints; both outer segments stay horizontal
 with their pads on the surface. The raised thumb forms the open groove beside the index finger. A slight body turn places
 the bridge shoulder forward and the grip shoulder back. The bridge hand reaches
-ahead of its elbow, and the grip elbow bends upward in the cue plane. The grip
+ahead of its elbow, and the grip elbow bends upward with a slight outward bias
+for deeper shots, keeping it outside the torso throughout follow-through. Wider
+avatars gain a small sideways body offset, with the planted bridge adjusted to
+remain reachable. The grip
 uses native articulated hand poses: curved fingers surround the actual shaft
-and the thumb points toward the ball. The approved grip is 10 cm farther back
-for Jay's avatar, leaving room for the forearm throughout follow-through; the
-existing height adjustment fits other avatars. Native IK retains each avatar's
-real arm lengths. Power pulls the cue back
+and the thumb points toward the ball. For deep shots the height-adjusted grip
+moves farther back, leaving at least 13.5 cm of shaft behind the hand. The body
+advances gradually to preserve reach during the strongest backswing. Native IK
+retains each avatar's real arm lengths. Power pulls the cue back
 up to 14 cm, leaving room for the extra backswing within the existing 16 cm
 reach. The server reserves the table during the backswing and accelerating
 forward stroke. The cue reaches the actual launch speed at contact and slows
@@ -197,7 +208,7 @@ The same aiming and stroke code is rendered by every nearby client; body poses
 are not sent as per-bone network packets. Clients without this fork's `setPose`
 API still display the physical cue and play the timed shot.
 
-This is a first procedural stance rather than motion capture. Extremely short
+This is a procedural stance rather than motion capture. Extremely short
 avatars and long reaches across the table can hit the native arm-reach limit;
 limbs are not stretched, and a mechanical bridge is not included.
 

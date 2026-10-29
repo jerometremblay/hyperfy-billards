@@ -1819,13 +1819,43 @@
     const local = (point) => point.clone().sub(player.position).applyQuaternion(inverse);
     const cueDirection = UP.clone().applyQuaternion(cueQuaternion);
     const { height, hipsY, footY } = measurements;
-    const gripOffset = Math.max(-0.4, Math.min(-0.08, -0.28 + (height - 1.8256) * 0.85));
-    const grip = cuePosition.clone().addScaledVector(cueDirection, gripOffset);
-    const reach = 0.93 + (height - 1.8256) * 1.4;
     const alongCue = new V(cueDirection.x, 0, cueDirection.z).normalize();
     const distance = contactPosition.clone().sub(player.position).dot(alongCue);
-    const bridgeDistance = Math.max(0.23, Math.min(0.75, distance - reach));
+    const extraReach = Math.max(0, distance - 1.2);
+    const bodyClearance = Math.max(0, Math.min(0.06, ((measurements.cueOffset ?? 0.24) - 0.24) * 0.9)) * Math.min(1, extraReach / 0.25);
+    const clothY = local(contactPosition).y - 0.028575;
+    const legSpan = Math.max(0.3, hipsY - footY);
+    const baseLegHeight = Math.max(legSpan * 0.6, Math.min(legSpan, clothY + 0.16 - footY));
+    const risePerAdvance = 0.6;
+    const slopeSquared = 1 + risePerAdvance * risePerAdvance;
+    const maxAdvance = (Math.sqrt(slopeSquared * legSpan * legSpan - baseLegHeight * baseLegHeight) - risePerAdvance * baseLegHeight) / slopeSquared;
+    const advance = Math.min(extraReach * 0.75, Math.max(0, maxAdvance) * 0.9);
+    const legHeight = baseLegHeight + advance * risePerAdvance;
+    const knee = 2 * Math.acos(Math.min(1, Math.hypot(legHeight, advance) / legSpan));
+    const lean = Math.max(0.65, Math.min(1.2, 1 + (height - 1.6686) * 0.4)) + advance;
+    const hipsOffset = alongCue.clone().applyQuaternion(inverse).multiplyScalar(advance);
+    hipsOffset.y = legHeight - legSpan - 0.028 * height / 1.6686;
+    const legTilt = new Q().setFromAxisAngle(
+      alongCue.clone().applyQuaternion(inverse).cross(UP).normalize(),
+      -Math.atan2(advance, legHeight)
+    );
+    const upperLeg = (y, z) => new Q().setFromAxisAngle(X, lean).multiply(legTilt).multiply(new Q().setFromEuler(new E(knee / 2, y, z))).toArray();
+    const foot = (y) => legTilt.clone().invert().premultiply(new Q().setFromAxisAngle(X, knee / 2)).multiply(new Q().setFromAxisAngle(Y, y)).toArray();
+    const gripLimit = Math.max(-0.6, Math.min(-0.5, -0.5 - (height - 1.6686)));
+    const gripOffset = Math.max(
+      gripLimit,
+      Math.max(-0.4, Math.min(-0.08, -0.28 + (height - 1.8256) * 0.85)) - Math.min(0.2, (extraReach - advance) * 0.5) - Math.min(0.2, Math.max(0, distance - 1.4))
+    );
+    const grip = cuePosition.clone().addScaledVector(cueDirection, gripOffset);
+    const reach = 0.93 + (height - 1.8256) * 1.4;
+    const bridgeDistance = Math.max(0.23, Math.min(0.97, 0.475 - gripOffset, distance - reach - advance * 0.7 + bodyClearance * 0.3));
     const across = new V(-cueDirection.z, 0, cueDirection.x).normalize();
+    const gripPole = across.clone().applyQuaternion(inverse).multiplyScalar(Math.min(0.25, extraReach));
+    gripPole.y = 1;
+    hipsOffset.addScaledVector(
+      across.clone().applyQuaternion(inverse),
+      -bodyClearance
+    );
     const bridgeScale = (measurements.bridgePalmLength ?? 0.091586 * height / 1.8256) / 0.091586;
     const bridgeWidth = measurements.bridgeWidth ?? 0.061071 * height / 1.8256;
     const bridge = cuePosition.clone().addScaledVector(
@@ -1833,11 +1863,6 @@
       contactPosition.clone().sub(cuePosition).dot(cueDirection) - bridgeDistance
     ).addScaledVector(across, -bridgeWidth * 0.62);
     bridge.y = contactPosition.y - 0.028575 + 0.035 * bridgeScale;
-    const clothY = local(contactPosition).y - 0.028575;
-    const legSpan = Math.max(0.3, hipsY - footY);
-    const knee = 2 * Math.acos(Math.max(0.6, Math.min(1, (clothY + 0.16 - footY) / legSpan)));
-    const lean = Math.max(0.65, Math.min(1.2, 1 + (height - 1.6686) * 0.4));
-    const hipsOffset = -legSpan * (1 - Math.cos(knee / 2)) - 0.028 * height / 1.6686;
     const back = cueDirection.clone().negate();
     const wristUp = UP.clone().addScaledVector(cueDirection, -UP.dot(cueDirection)).normalize();
     const outside = wristUp.clone().cross(back).normalize();
@@ -1884,18 +1909,18 @@
     }
     return {
       bones: {
-        hips: { rotation: rotation(-lean), position: [0, hipsOffset, 0] },
+        hips: { rotation: rotation(-lean), position: hipsOffset.toArray() },
         spine: { rotation: rotation(-0.25) },
         chest: { rotation: rotation(-0.18, -0.08) },
         upperChest: { rotation: rotation(-0.08) },
         neck: { rotation: rotation(0.5) },
         head: { rotation: rotation(0.55, 0.08) },
-        leftUpperLeg: { rotation: rotation(lean + knee / 2, 0.05, -0.08) },
+        leftUpperLeg: { rotation: upperLeg(0.05, -0.08) },
         leftLowerLeg: { rotation: rotation(-knee) },
-        leftFoot: { rotation: rotation(knee / 2, 0.08) },
-        rightUpperLeg: { rotation: rotation(lean + knee / 2, -0.08, 0.08) },
+        leftFoot: { rotation: foot(0.08) },
+        rightUpperLeg: { rotation: upperLeg(-0.08, 0.08) },
         rightLowerLeg: { rotation: rotation(-knee) },
-        rightFoot: { rotation: rotation(knee / 2, -0.1) }
+        rightFoot: { rotation: foot(-0.1) }
       },
       hands: {
         left: {
@@ -1910,7 +1935,7 @@
           p: local(gripWrist).toArray(),
           w: gripRotation.toArray(),
           f: gripFingers,
-          pole: [0, 1, 0]
+          pole: gripPole.toArray()
         }
       }
     };

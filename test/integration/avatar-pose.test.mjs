@@ -8,7 +8,7 @@ import { build } from 'esbuild'
 import { hyperfyRoot } from '../../tools/hyperfy.mjs'
 import { physics, harness } from '../helpers.mjs'
 
-test('native avatar reaches its bridge forward and keeps the grip elbow in the vertical cue plane', async () => {
+test('native avatar plants the bridge and keeps the grip arm clear of its torso', async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'billard-avatar-clearance-'))
   try {
     await build({
@@ -25,7 +25,8 @@ test('native avatar reaches its bridge forward and keeps the grip elbow in the v
     globalThis.createImageBitmap = async () => ({ width: 1, height: 1, close() {} })
     const loader = new GLTFLoader()
     loader.register(parser => new VRMLoaderPlugin(parser))
-    const bytes = await fs.readFile(path.join(hyperfyRoot, 'src/world/assets/avatar.vrm'))
+    const bytes = await fs.readFile(process.env.BILLARD_AVATAR ||
+      path.join(hyperfyRoot, 'src/world/assets/avatar.vrm'))
     const glb = await loader.parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '')
     glb.scene.traverse(node => {
       if (node.geometry) node.geometry.computeBoundsTree = () => node.geometry
@@ -121,7 +122,7 @@ test('native avatar reaches its bridge forward and keeps the grip elbow in the v
           }
         }
         if (handBones.has(name)) handVertices.push({ mesh, i, name })
-        else if (!armBones.has(name)) bodyVertices.push({ mesh, i })
+        else if (!armBones.has(name)) bodyVertices.push({ mesh, i, name })
       }
     })
     assert.ok(handVertices.length > 0, 'real bridge skin is included')
@@ -162,15 +163,104 @@ test('native avatar reaches its bridge forward and keeps the grip elbow in the v
         }
       }
     }
+    const rackSource = await fs.readFile(new URL('../../cue-rack/rack.js', import.meta.url), 'utf8')
+    const rack = harness({ source: rackSource, players: [actor],
+      state: { holders: ['alice', null, null, null] } })
+    const heldCue = rack.created.find(n => n.name === 'group')
+    const torsoNames = new Set(['hips', 'spine', 'chest', 'upperChest'].map(name =>
+      glb.userData.vrm.humanoid.getRawBoneNode(name)?.name))
+    const torsoVertices = bodyVertices.filter(vertex => torsoNames.has(vertex.name))
+    // A farther ball must bring the body and planted bridge over the rail,
+    // rather than leave the native wrists clamped short of the physical cue.
+    for (const [deepBall, deepAngle] of [
+      [[0, .2, 0], Math.PI / 2], [[0, .25, 0], Math.PI / 2],
+      [[0, .35, 0], Math.PI / 2], [[0, .42, 0], Math.PI / 2], [[0, .5, 0], Math.PI / 2],
+      [[0, .48, 0], Math.PI / 2], [[0, -.48, 0], 1.5 * Math.PI],
+      [[0, 0, 0], 0], [[0, 0, 0], Math.PI],
+    ]) {
+      const deepStance = physics.avatarStance(deepBall, deepAngle, physics.dimensions('8'),
+        -0.708, measurements.cueOffset)
+      const deepFrame = quaternion.clone().multiply(deepStance.quaternion.clone().invert())
+      const deepWorldPoint = point => point.clone().sub(deepStance.position)
+        .applyQuaternion(deepFrame).add(position)
+      const toTable = point => point.clone().sub(position)
+        .applyQuaternion(deepFrame.clone().invert()).add(deepStance.position)
+      const forward = new THREE.Vector3(Math.cos(deepAngle), 0, -Math.sin(deepAngle))
+      const across = new THREE.Vector3(Math.sin(deepAngle), 0, Math.cos(deepAngle))
+      for (const deepSpeed of [.1, 2.5, 5]) for (const [deepSide, deepTop] of [
+        [0, -.45], [0, 0], [0, .45], [-.45, 0], [.45, 0],
+      ]) {
+        let planted
+        for (const time of [0, .1, .24, physics.STROKE_CONTACT, .446, physics.STROKE_END]) {
+          const shot = physics.strokePose({ ball: deepBall, angle: deepAngle, speed: deepSpeed,
+            side: deepSide, top: deepTop }, time)
+          const deepPose = physics.playerAimPose(actor, deepWorldPoint(shot.cuePosition),
+            deepFrame.clone().multiply(shot.cueQuaternion), deepWorldPoint(shot.cameraTarget), measurements)
+          instance.setScriptedPose(deepPose)
+          instance.update(1 / 60)
+          scene.updateMatrixWorld(true)
+          const cuePosition = deepWorldPoint(shot.cuePosition)
+          const cueQuaternion = deepFrame.clone().multiply(shot.cueQuaternion)
+          rack.world.emit('billard:cue-pose', { playerId: actor.id, tableId: 'table',
+            position: cuePosition.toArray(), quaternion: cueQuaternion.toArray() })
+          rack.emit('lateUpdate', 1 / 60)
+          assert.ok(heldCue.position.distanceTo(cuePosition) < 1e-5,
+            'real rack cue stays on the shot line during a deep bend')
+          assert.ok(heldCue.quaternion.angleTo(cueQuaternion) < 1e-6,
+            'real rack cue keeps the shot direction during a deep bend')
+          const hips = toTable(worldBone('hips'))
+          assert.ok(hips.clone().sub(deepStance.position).dot(forward) > .05,
+            'rendered hips advance over the rail for a deeper ball')
+          assert.ok(hips.y > .15, 'hips rise enough to clear the rail')
+          for (const side of ['left', 'right']) {
+            const target = new THREE.Vector3(...deepPose.hands[side].p)
+              .applyQuaternion(quaternion).add(position)
+            assert.ok(worldBone(side + 'Hand').distanceTo(target) < .005,
+              `${side} wrist reaches the real cue at ${deepStance.distance.toFixed(2)} m, ${deepSpeed} m/s, ${time}s, spin ${deepSide}/${deepTop}: ${(worldBone(side + 'Hand').distanceTo(target) * 1000).toFixed(1)} mm`)
+            assert.ok(Math.abs(worldBone(side + 'Foot').y - position.y - beforeFoot.y) < .025,
+              'feet remain grounded while the body advances')
+          }
+          const wrist = worldBone('leftHand')
+          if (!planted) planted = wrist.clone()
+          assert.ok(wrist.distanceTo(planted) < 1e-6, 'deep bridge stays planted throughout the stroke')
+          assert.ok(worldBone('leftHand').distanceTo(worldBone('rightHand')) > .13,
+            'the long bridge leaves room for the grip during follow-through')
+          const shoulder = worldBone('rightUpperArm'), elbow = worldBone('rightLowerArm')
+          assert.ok(Math.abs(shoulder.distanceTo(elbow) - upperLength) < 1e-6)
+          assert.ok(Math.abs(elbow.distanceTo(worldBone('rightHand')) - lowerLength) < 1e-6)
+          assert.ok(elbow.y - worldBone('rightHand').y > .05, 'grip elbow stays raised')
+          // Sample the real skinned torso next to the forearm, including its
+          // elbow. Hand attachment alone permits the whole arm to fold inward.
+          const torso = torsoVertices.map(({ mesh, i }) => {
+            const vertex = new THREE.Vector3().fromBufferAttribute(mesh.geometry.attributes.position, i)
+            mesh.applyBoneTransform(i, vertex).applyMatrix4(mesh.matrixWorld)
+            return toTable(vertex)
+          })
+          for (let sample = 0; sample <= 10; sample++) {
+            const arm = toTable(elbow.clone().lerp(worldBone('rightHand'), sample / 10))
+            const near = torso.filter(vertex => Math.abs(vertex.y - arm.y) < .03 &&
+              Math.abs(vertex.clone().sub(arm).dot(forward)) < .03)
+            if (!near.length) continue
+            const outside = Math.max(...near.map(vertex => vertex.dot(across)))
+            const clearance = arm.dot(across) - outside
+            assert.ok(clearance > .035,
+              `grip forearm clears torso at ${deepStance.distance.toFixed(2)} m, ${deepSpeed} m/s, ${time}s, spin ${deepSide}/${deepTop}: ${(clearance * 1000).toFixed(1)} mm, sample ${sample}`)
+          }
+          for (const { mesh, i } of bodyVertices) {
+            point.fromBufferAttribute(mesh.geometry.attributes.position, i)
+            mesh.applyBoneTransform(i, point).applyMatrix4(mesh.matrixWorld)
+            point.copy(toTable(point))
+            assert.ok(!(Math.abs(point.x) < 1.36 && Math.abs(point.z) < .765 &&
+              point.y > -.708 && point.y < .055), 'deep body skin clears the table and rail')
+          }
+        }
+      }
+    }
     instance.setScriptedPose(null)
     instance.update(1 / 60)
     assert.ok(bone('leftFoot').distanceTo(beforeFoot) < 1e-6, 'normal pose restores after aiming')
     // Read actual normalized/raw VRM wrist transforms through the rack's normal
     // pose event, including the local rendered root prediction used by the shooter.
-    const rackSource = await fs.readFile(new URL('../../cue-rack/rack.js', import.meta.url), 'utf8')
-    const rack = harness({ source: rackSource, players: [actor],
-      state: { holders: ['alice', null, null, null] } })
-    const heldCue = rack.created.find(n => n.name === 'group')
     const shot = physics.shotPose(ball, angle, 0, 0, undefined, 2.5)
     const cuePosition = worldPoint(shot.cuePosition)
     const cueQuaternion = cueFrame.clone().multiply(shot.cueQuaternion)
