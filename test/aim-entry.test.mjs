@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
-import { harness, player, physics } from './helpers.mjs'
+import { harness, player, physics, cueAlignedEye } from './helpers.mjs'
 
 const surface = client => client.created.find(n => n.name === 'prim' && n.opacity === 0)
 function setup() {
@@ -29,7 +29,7 @@ test('shooter and observer start one native descent, then update aim without res
   }
 })
 
-test('aim camera eases from its previous rendered view into the eyes at 20, 30, 60 and 144 FPS', () => {
+test('aim camera eases from its previous rendered view into the centered eye-height view at 20, 30, 60 and 144 FPS', () => {
   for (const fps of [20, 30, 60, 144]) {
     const s = setup()
     const eye = new THREE.Vector3(.2, 1.6, 1.5), matrix = new THREE.Matrix4()
@@ -43,8 +43,9 @@ test('aim camera eases from its previous rendered view into the eyes at 20, 30, 
     const start = s.client.control.camera.position.clone()
     const startRotation = s.client.control.camera.quaternion.clone()
     const ball = s.server.app.state.pool.balls[0].p
-    const look = new THREE.Vector3(ball[0], physics.BALL_RADIUS + ball[2], -ball[1])
-      .add(s.client.app.position).sub(rightEye)
+    const ballWorld = new THREE.Vector3(ball[0], physics.BALL_RADIUS + ball[2], -ball[1]).add(s.client.app.position)
+    const end = cueAlignedEye(rightEye, ballWorld, s.server.app.state.aim.angle)
+    const look = ballWorld.clone().sub(end)
     const endRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(
       Math.atan2(look.y, Math.hypot(look.x, look.z)), Math.atan2(-look.x, -look.z), 0, 'YXZ'))
     for (let frame = 1; frame <= fps; frame++) {
@@ -52,13 +53,13 @@ test('aim camera eases from its previous rendered view into the eyes at 20, 30, 
       s.client.advanceTime(1 / fps - capped)
       s.client.emit('update', capped)
       const t = frame / fps, ease = t * t * (3 - 2 * t)
-      const expected = start.clone().lerp(rightEye, ease)
+      const expected = start.clone().lerp(end, ease)
       assert.ok(s.client.control.camera.position.distanceTo(expected) < 1e-8,
         `${fps} FPS: camera must share the descent timing`)
       assert.ok(s.client.control.camera.quaternion.angleTo(startRotation.clone().slerp(endRotation, ease)) < 1e-6,
         'camera rotation must ease with its position')
     }
-    assert.ok(s.client.control.camera.position.distanceTo(rightEye) < 1e-8)
+    assert.ok(s.client.control.camera.position.distanceTo(end) < 1e-8)
     assert.equal(s.actor.cameraCalls[0].duration, 1)
     assert.equal(s.actor.cameraCalls[0].armsOnly, true)
     assert.equal(s.actor.cameraCalls[0].headOnly, true)
@@ -119,7 +120,7 @@ test('a delayed first pose frame starts the body, camera and visibility mask tog
 })
 
 
-test('entry takes one straight path to the lowered right eye while the rendered head curves', () => {
+test('entry takes one straight path to the centered eye-height view while the rendered head curves', () => {
   for (const bone of ['rightEye', 'head']) for (const fps of [20, 30, 60, 144]) {
     const s = setup()
     const goal = new THREE.Vector3(.2, 1.1, 1.5)
@@ -139,10 +140,12 @@ test('entry takes one straight path to the lowered right eye while the rendered 
     const ball = s.server.app.state.pool.balls[0].p
     const ballWorld = new THREE.Vector3(ball[0], physics.BALL_RADIUS + ball[2], -ball[1])
       .add(s.client.app.position)
-    const end = goal.clone()
+    let end = goal.clone()
     if (bone === 'head') end.addScaledVector(
       ballWorld.clone().sub(goal).cross(new THREE.Vector3(0, 1, 0)).normalize(),
       .03 * s.actor.height / 1.7)
+    const angle = Math.atan2(ball[1] + s.actor.position.z, ball[0] - s.actor.position.x)
+    end = cueAlignedEye(end, ballWorld, angle)
     const look = ballWorld.clone().sub(end)
     const endRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(
       Math.atan2(look.y, Math.hypot(look.x, look.z)), Math.atan2(-look.x, -look.z), 0, 'YXZ'))

@@ -125,13 +125,20 @@ minimum follow-through and Space release; delayed packets cannot restart the pos
 first-person visibility hides the local head. During lowering and rising, the
 local body is also hidden while arms and hands stay visible; other players still
 see the full avatar. If a right-eye bone is missing, the camera estimates its
-position from the left eye or head, with a rightward offset scaled to avatar height. Mouse movement orbits the ball and changes aim. Cancelling restores the
+position from the left eye or head, with a rightward offset scaled to avatar height.
+The view stays directly over the cue line, retaining the right eye’s height and
+reach. Side spin keeps the shaft centered on its selected contact line.
+Horizontal mouse movement turns the aim. Vertical movement orbits only the camera
+around the white ball from just above the cue to 85° above the table, retaining
+its distance and pointing at the ball. It stays on the shooter’s side of the ball. The view stays at that orbit during the shot; each new aim starts at eye
+level. Cancelling restores the
 previous camera. The avatar moves close enough to hold the cue while its
 collision capsule stays outside the rails. The actual held 1.47 m cue aligns
 behind the ball, including spin offsets. Other players see both the cue and the
 avatar's low aiming stance. There is no trajectory line.
 
-- Mouse or left/right arrows: turn aim. Scroll back to pull the cue farther from
+- Mouse left/right or left/right arrows: turn aim. Mouse up/down: orbit the view
+  around the white ball (up lowers the view, down raises it). Scroll back to pull the cue farther from
   the ball for a stronger shot; scroll closer for less force (0.1–5 m/s).
   Up/down arrows also adjust power. Other players see the cue's pullback.
 - W/S: top/back spin. A/D: side spin. Offset is limited to 0.45 ball radii.

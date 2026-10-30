@@ -183,3 +183,9 @@ export function player(id, networkId = id) {
   return { id, networkId, poseCalls: [], poseOptionsCalls: [], setPose(pose, options) { this.poseCalls.push(structuredClone(pose)); this.poseOptionsCalls.push(structuredClone(options)); this.pose = pose; return true }, cameraCalls: [], setCamera(options) { this.cameraCalls.push({...options, target: options.target?.clone(), quaternion: options.quaternion?.clone()}) }, position: new THREE.Vector3(0, 0, 1.5), quaternion: new THREE.Quaternion(),
     teleport(position, yaw) { this.position.copy(position); this.quaternion.setFromEuler(new THREE.Euler(0, yaw, 0)) } }
 }
+
+// Expected eye-height view on the vertical plane containing a level shot line.
+export function cueAlignedEye(eye, ball, angle, tableRotation = new THREE.Quaternion()) {
+  const forward = new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle)).applyQuaternion(tableRotation)
+  return ball.clone().addScaledVector(forward, eye.clone().sub(ball).dot(forward)).setY(eye.y)
+}

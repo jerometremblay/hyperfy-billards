@@ -14,7 +14,7 @@ function bridgeSide(pose, actor) {
     const inverse = new THREE.Quaternion(...pose.hands.left.w).invert()
     const index = new THREE.Vector3(0, 0, -1).applyQuaternion(
       inverse.clone().multiply(new THREE.Quaternion(...pose.hands.left.f.IndexProximal)))
-    if (index.x > .6) return 'rail-slide'
+    if (index.x > .2) return 'rail-slide'
     const middle = new THREE.Vector3(0, 0, -1).applyQuaternion(
       inverse.clone().multiply(new THREE.Quaternion(...pose.hands.left.f.MiddleDistal)))
     return middle.y < -.4 ? 'cloth-tight' : 'flat'

@@ -60,8 +60,14 @@ test('farther rail bridge rests the shaft directly on the rail and puts the inde
     const rail = result.cue.cuePosition.clone().addScaledVector(direction,
       (-(size.length / 2 + .04) - result.cue.cuePosition.x) / direction.x)
     assert.ok(Math.abs(rail.y - .006 - .0433) < .002, 'shaft underside touches the flat rail')
-    assert.ok(result.finger('IndexProximal').z > .7, 'index arches across the shaft')
-    assert.ok(result.finger('IndexIntermediate').y < -.8, 'index bends down on the other side')
+    const directions = ['Proximal', 'Intermediate', 'Distal'].map(segment => result.finger('Index' + segment))
+    assert.ok(directions[0].z > .2 && directions[0].z < .6, 'index reaches across the shaft without twisting sideways')
+    const bendPlane = directions[0].clone().setY(0).normalize()
+    for (const direction of directions.slice(1))
+      assert.ok(direction.clone().setY(0).normalize().dot(bendPlane) > .99, 'outer index joints flex in the same plane')
+    assert.ok(directions[0].angleTo(directions[1]) < Math.PI / 3, 'middle joint has a gentle curve')
+    assert.ok(directions[1].angleTo(directions[2]) < Math.PI / 4, 'fingertip follows the curve')
+    assert.ok(directions[2].y < -.45, 'fingertip bends down toward the rail')
   }
 })
 

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
 import { readFile } from 'node:fs/promises'
-import { harness, player, physics } from './helpers.mjs'
+import { harness, player, physics, cueAlignedEye } from './helpers.mjs'
 const clientSource = process.env.BILLARD_CLIENT_SCRIPT
   ? await readFile(process.env.BILLARD_CLIENT_SCRIPT, 'utf8') : undefined
 function playSurface(client) {
@@ -298,13 +298,14 @@ test('aiming hides the local head with native first-person visibility and restor
 })
 
 
-test('aim and held shot cameras use the right eye instead of the midpoint through the stroke', () => {
+test('aim and held shot cameras retain right-eye height and reach while centered over the cue', () => {
   const { client, server, players } = setup()
   clickPlay(client)
   client.emit('update', 0.06)
   client.emit('update', 1) // Finish entry before testing the steady eye camera.
   const aiming = client.control
   const target = worldBall(client, server.app.state.pool.balls[0].p)
+  const shotAngle = server.app.state.aim.angle
   const centre = aiming.camera.position.clone()
   const rightEye = centre.clone().add(new THREE.Vector3(.035, 0, 0))
   const scratch = new THREE.Matrix4()
@@ -314,14 +315,14 @@ test('aim and held shot cameras use the right eye instead of the midpoint throug
     return null
   }
   client.emit('update', 0.01)
-  assert.ok(aiming.camera.position.distanceTo(rightEye) < 1e-8)
+  assert.ok(aiming.camera.position.distanceTo(cueAlignedEye(rightEye, target, shotAngle)) < 1e-8)
   aimedAt(aiming.camera, target)
   aiming.space.onPress()
   const held = client.activeControl
   rightEye.y += 0.45
   centre.y -= 0.2 // The left eye must not pull the shot camera toward the midpoint.
   client.emit('update', 0.01)
-  assert.ok(held.camera.position.distanceTo(rightEye) < 1e-8, 'the camera follows only the right eye during the stroke')
+  assert.ok(held.camera.position.distanceTo(cueAlignedEye(rightEye, target, shotAngle)) < 1e-8, 'the camera follows right-eye height and reach during the stroke')
   aimedAt(held.camera, target)
   assert.equal(players[0].cameraCalls.length, 1, 'the head remains hidden until the native camera returns')
   client.emit('destroy')
@@ -330,7 +331,7 @@ test('aim and held shot cameras use the right eye instead of the midpoint throug
 
 test('right-eye camera estimates missing right eyes from a left eye or head, scaled to avatar height', () => {
   for (const bone of ['leftEye', 'rightEye', 'head']) for (const height of [1.2, 1.8256]) {
-    const { client, players } = setup()
+    const { client, players, server } = setup()
     const position = new THREE.Vector3(0.2, 1.1, 0.6)
     players[0].height = height
     players[0].getBoneTransform = name => name === bone ? new THREE.Matrix4().makeTranslation(...position.toArray()) : null
@@ -338,9 +339,10 @@ test('right-eye camera estimates missing right eyes from a left eye or head, sca
     client.emit('update', 0.06)
     client.emit('update', 1) // Finish entry before testing the steady eye camera.
     const ball = worldBall(client, client.app.state.pool.balls[0].p)
-    const expected = position.clone()
+    let expected = position.clone()
     if (bone !== 'rightEye') expected.addScaledVector(ball.clone().sub(position)
       .cross(new THREE.Vector3(0, 1, 0)).normalize(), (bone === 'leftEye' ? .06 : .03) * height / 1.7)
+    expected = cueAlignedEye(expected, ball, server.app.state.aim.angle)
     assert.ok(client.control.camera.position.distanceTo(expected) < 1e-8)
     aimedAt(client.control.camera, ball)
     client.emit('destroy')
@@ -373,7 +375,7 @@ test('the eye camera reads the solved pose in lateUpdate after an orbit turn', (
   for (const update of client.handlers.update) update(0.01)
   eyes.add(new THREE.Vector3(0.08, 0.2, 0))
   for (const lateUpdate of client.handlers.lateUpdate) lateUpdate(0.01)
-  assert.ok(aiming.camera.position.distanceTo(eyes) < 1e-8)
+  assert.ok(aiming.camera.position.distanceTo(cueAlignedEye(eyes, target, server.app.state.aim.angle)) < 1e-8)
   aimedAt(aiming.camera, target)
   aiming.escape.onPress()
   assert.equal(client.handlers.lateUpdate.length, 0)

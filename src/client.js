@@ -21,7 +21,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   let latest = app.state?.pool, frames = [], clock = 0, control = null, idle = null
   let pending = false, requestedAt = 0, shotPending = false, shotRequestSeq = -1, ping = 0, sinceAim = 0
   let angle = 0, speed = 2.5, side = 0, top = 0
-  let elevation = AIM_ELEVATION, floorY = 0
+  let cameraOrbit = 0, floorY = 0, cueElevation = Math.atan(0.045)
   let aimStance = null
   let placeX = -size.length / 4, placeY = 0
   let cueHolders = latest?.cueHolders || [], aim = app.state?.aim, posedPlayer = null
@@ -29,8 +29,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   const volumeEvent = `billard:volume:${playChannel}`
   world.on(volumeEvent, value => sounds.setVolume(value))
   app.emit(`${volumeEvent}:request`)
-  let poseMeasurements = null, savedCamera = null, cameraHold = null
-  let aimCuePosition = null, aimCueAcross = null
+  let poseMeasurements = null, savedCamera = null, cameraHold = null, aimCue = null
   let aimCameraPosition = null, aimCameraTarget = null, strokePlayback = null, completedStrokeId = -1
   const riseDuration = 1
   let aimEntry = null, posedBody = false, poseEntryAt = null, aimCameraPending = false
@@ -113,7 +112,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       if (posedPlayer === me.id && cameraHold) returnCamera()
     }
     poseMeasurements = null
-    aimCuePosition = aimCueAcross = null
+    aimCue = null
     posedPlayer = null
     posedBody = false
     poseEntryAt = null
@@ -190,7 +189,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       else {
         const ball = latest.balls[0].p
         cameraHold = { control: null, returnAt: null, holding: control.space.down, strokeId: latest.seq + 1,
-          position: control.camera.position.clone(),
+          position: aimCameraPosition?.clone() || control.camera.position.clone(),
           target: worldPosition(new Vector3(ball[0], R + ball[2], -ball[1])) }
         // An early shot finishes lowering during the backswing, before impact.
         if (aimEntry) aimEntry = { at: clock, duration: 0.1,
@@ -225,7 +224,8 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     control.escape.onPress = () => stop()
     ui.active = true
     sinceAim = 1
-    elevation = AIM_ELEVATION
+    cameraOrbit = 0
+    cueElevation = Math.atan(0.045)
     aimStance = null
     const local = me.position.clone().sub(app.position).applyQuaternion(app.quaternion.clone().invert())
     floorY = local.y < -0.35 ? local.y : -0.708
@@ -306,6 +306,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   app.emit(`${cueEvent}:request`)
   const axis = new Vector3()
   const cameraRotation = new Quaternion()
+  const orbitRotation = new Quaternion()
   const cameraUp = new Vector3(0, 1, 0)
   const worldPosition = local => local.clone().multiply(app.scale).applyQuaternion(app.quaternion).add(app.position)
   const writeAimCamera = (camera, position, target) => {
@@ -325,13 +326,27 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         camera.position.addScaledVector(axis, (leftEye ? 0.06 : 0.03) * height / 1.7)
       }
     }
-    // Standing animation can bias the captured body measurements sideways.
-    // Retain the rendered eye height and reach, but sight over the actual shaft.
-    if (aimCuePosition && aimCueAcross)
-      camera.position.addScaledVector(aimCueAcross, aimCuePosition.clone().sub(camera.position).dot(aimCueAcross))
+    // Keep the whole shaft on the screen centerline, including side spin.
+    // Preserve eye height and reach; slide only the view onto the cue's plane.
+    if (aimCue) {
+      const across = aimCue.across
+      camera.position.addScaledVector(across, aimCue.position.clone().sub(camera.position).dot(across))
+      target = target.clone().addScaledVector(across, aimCue.position.clone().sub(target).dot(across))
+    }
     const look = target.clone().sub(camera.position)
     camera.quaternion.setFromEuler(new Euler(
       Math.atan2(look.y, Math.hypot(look.x, look.z)), Math.atan2(-look.x, -look.z), 0, 'YXZ'))
+    // Stay above the shaft and on the shooter's side of the ball. Clamp the
+    // input itself so reversing at either limit moves the view immediately.
+    const eyeElevation = Math.atan2(-look.y, Math.hypot(look.x, look.z))
+    cameraOrbit = Math.max(eyeElevation - 85 * Math.PI / 180,
+      Math.min(eyeElevation - cueElevation - 0.03, cameraOrbit))
+    if (cameraOrbit) {
+      axis.set(1, 0, 0).applyQuaternion(camera.quaternion)
+      orbitRotation.setFromAxisAngle(axis, cameraOrbit)
+      camera.position.sub(target).applyQuaternion(orbitRotation).add(target)
+      camera.quaternion.premultiply(orbitRotation)
+    }
     if (aimEntry) {
       if (aimEntry.at === null) {
         camera.position.copy(aimEntry.position)
@@ -429,7 +444,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       const pointer = control.pointer.delta
       const turn = horizontal * dt + pointer.x * 0.003
       angle = Math.atan2(Math.sin(angle - turn), Math.cos(angle - turn))
-      elevation = Math.max(0.08, Math.min(0.75, elevation + pointer.y * 0.003))
+      cameraOrbit -= pointer.y * 0.003
       if (latest?.scratched) {
         const forward = Number(control.keyW.down) - Number(control.keyS.down)
         const right = Number(control.keyD.down) - Number(control.keyA.down)
@@ -451,7 +466,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       }
       const ball = latest?.scratched ? [placeX, placeY, 0] : latest?.balls[0]?.p
       if (ball) {
-        const pose = shotPose(ball, angle, side, top, elevation, speed)
+        const pose = shotPose(ball, angle, side, top, AIM_ELEVATION, speed)
         aimCameraPosition = worldPosition(pose.cameraPosition)
         aimCameraTarget = worldPosition(pose.cameraTarget)
         // Predict only the local rendered stance. The server validates aim and
@@ -471,7 +486,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       ghost.active = false
       text.value = latest?.error || (latest?.scratched
         ? 'Scratch · Mouse / ← →: orbit · WASD: move white ball\nClick / Space: confirm · R: re-rack · Esc: leave'
-        : `Mouse: orbit / aim · Scroll back / closer: Power ${speed.toFixed(1)} m/s · W/S Top ${top.toFixed(2)} · A/D Side ${side.toFixed(2)}\nSpace: shoot · Esc: leave · X: return cue`)
+        : `Mouse ←/→: aim · ↑/↓: orbit view · Scroll back / closer: Power ${speed.toFixed(1)} m/s · W/S Top ${top.toFixed(2)} · A/D Side ${side.toFixed(2)}\nSpace: shoot · Esc: leave · X: return cue`)
     }
     // Move the actual cue from the existing rack, visible to every observer.
     const shooter = latest?.owner
@@ -504,9 +519,10 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       const predicted = actor === me.id && (control || cameraHold) && aimStance
       const { bridgeType, ...avatarPose } = playerAimPose(predicted || player, cuePosition, cueQuaternion,
         worldPosition(pose.cameraTarget), poseMeasurements, { position: app.position, quaternion: app.quaternion, size })
-      if (actor === me.id && poseMeasurements.body) {
-        aimCuePosition = cuePosition.clone()
-        aimCueAcross = new Vector3(0, 1, 0).applyQuaternion(cueQuaternion).cross(cameraUp).normalize()
+      if (actor === me.id) {
+        const shaft = new Vector3(0, 1, 0).applyQuaternion(cueQuaternion)
+        cueElevation = Math.atan2(-shaft.y, Math.hypot(shaft.x, shaft.z))
+        aimCue = { position: cuePosition.clone(), across: shaft.cross(cameraUp).normalize() }
       }
       if (predicted) avatarPose.root = { position: predicted.position.toArray(),
         quaternion: predicted.quaternion.toArray() }

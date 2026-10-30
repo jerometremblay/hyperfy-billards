@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { hyperfyRoot } from '../../tools/hyperfy.mjs'
-import { harness, player } from '../helpers.mjs'
+import { harness, player, physics, cueAlignedEye } from '../helpers.mjs'
 
 const temp = await mkdtemp(`${tmpdir()}/billard-camera-origin-`)
 await build({ stdin: { contents: "export * as THREE from 'three'; export { ClientControls } from './src/core/systems/ClientControls.js'", resolveDir: hyperfyRoot },
@@ -69,13 +69,16 @@ test('native third-person view remains the exact entry origin across a delayed s
     assert.ok(s.view().distanceTo(before) < 1e-8, 'the first aiming frame starts where the user was looking')
     assert.ok(s.nativeWorld.rig.quaternion.angleTo(rotation) < 1e-6)
     assert.equal(s.appBindings, 1, 'ownership acceptance retains the captured camera binding')
+    const ball = s.server.app.state.pool.balls[0].p
+    const target = new THREE.Vector3(ball[0], physics.BALL_RADIUS + ball[2], -ball[1]).add(s.client.app.position)
+    const end = cueAlignedEye(s.eye, target, s.server.app.state.aim.angle)
     for (let frame = 1; frame <= fps; frame++) {
       const delta = Math.min(1 / fps, 1 / 30)
       s.client.advanceTime(1 / fps - delta)
       s.client.emit('update', delta)
       s.controls.postLateUpdate()
       const t = frame / fps, ease = t * t * (3 - 2 * t)
-      assert.ok(s.view().distanceTo(before.clone().lerp(s.eye, ease)) < 1e-8,
+      assert.ok(s.view().distanceTo(before.clone().lerp(end, ease)) < 1e-8,
         'the entire straight path starts at the pre-request rendered view')
     }
     assert.ok(s.actor.position.equals(s.authority.position), 'the actual stance remains server-owned')
@@ -99,5 +102,42 @@ test('timeout, refusal and app destruction release the captured native view', ()
     assert.equal(s.controls.controls.length, 1, 'only native player controls remain')
     s.controls.postLateUpdate()
     assert.ok(s.nativeWorld.rig.position.equals(s.nativePlayer.camera.position))
+  }
+})
+
+
+test('native camera orbits the white ball vertically without moving the player pose or changing horizontal aim', () => {
+  for (const fps of [30, 60, 144]) {
+    const s = session(2.7, -.7)
+    s.surface.onPointerDown({ button: 'left' })
+    for (const [event, data] of s.requests.splice(0)) s.server.emit(event, data, 'alice')
+    for (const [event, data] of s.replies.splice(0)) s.client.emit(event, data)
+    for (let frame = 0; frame <= fps; frame++) {
+      s.client.emit('update', 1 / fps)
+      s.controls.postLateUpdate()
+    }
+    const initial = s.view(), pose = structuredClone(s.actor.pose)
+    const ball = new THREE.Vector3(...[s.server.app.state.pool.balls[0].p[0],
+      .028575 + s.client.app.position.y, -s.server.app.state.pool.balls[0].p[1]])
+    const radius = initial.distanceTo(ball)
+    const cameraControl = s.client.control
+    for (let frame = 0; frame < 96; frame++) {
+      cameraControl.pointer.delta.y = frame < 48 ? 40 : -40
+      s.client.emit('update', 1 / fps)
+      cameraControl.pointer.delta.y = 0
+      s.controls.postLateUpdate()
+      assert.ok(Math.abs(s.view().distanceTo(ball) - radius) < 1e-8)
+      const offset = s.view().sub(ball), pitch = Math.atan2(offset.y, Math.hypot(offset.x, offset.z))
+      assert.ok(pitch >= Math.atan(.045) + .03 - 1e-8, 'native camera stays above the cue')
+      assert.ok(pitch <= 85 * Math.PI / 180 + 1e-8, 'native camera stops before overhead')
+      assert.ok(new THREE.Vector3(0, 0, -1).applyQuaternion(s.nativeWorld.rig.quaternion)
+        .dot(ball.clone().sub(s.view()).normalize()) > 1 - 1e-8, 'native rendered view keeps the ball centered')
+      assert.deepEqual(structuredClone(s.actor.pose), pose, 'view orbit leaves the full native pose unchanged')
+      if (frame === 0) assert.ok(s.view().y > initial.y, 'mouse down raises the rendered view')
+    }
+    const offset = s.view().sub(ball)
+    assert.ok(Math.abs(Math.atan2(offset.y, Math.hypot(offset.x, offset.z)) - Math.atan(.045) - .03) < 1e-8,
+      'native rendered view stops at the lower limit')
+    s.client.emit('destroy')
   }
 })

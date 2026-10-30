@@ -345,6 +345,44 @@ test('native avatar plants the bridge and keeps the grip arm clear of its torso'
       assert.ok(heldCue.position.distanceTo(cuePosition) < 1e-5, 'real cue finishes at the unchanged aiming point')
       assert.ok(heldCue.quaternion.angleTo(cueQuaternion) < 1e-6)
     }
+    // Use the real solved VRM eyes, physical rack cue and app camera together.
+    instance.setScriptedPose(null)
+    instance.update(0)
+    actor.setPose = (pose, options) => { instance.setScriptedPose(pose, options?.duration || 0); return true }
+    const pool = structuredClone(harness({ server: true, players: [actor], cueHolders: ['alice'] }).app.state.pool)
+    const client = harness({ players: [actor], state: { pool } })
+    client.app.position.set(position.x, .762, position.z)
+    client.world.on('billard:cue-pose', data => rack.world.emit('billard:cue-pose', data))
+    client.created.find(node => node.name === 'prim' && node.opacity === 0).onPointerDown({ button: 'left' })
+    client.emit('pool:snapshot', { ...pool, seq: pool.seq + 1, owner: 'alice' })
+    const frame = () => {
+      client.advanceTime(1 / 60)
+      for (const update of client.handlers.update || []) update(1 / 60)
+      instance.update(1 / 60)
+      scene.updateMatrixWorld(true)
+      rack.emit('lateUpdate', 1 / 60)
+      for (const lateUpdate of client.handlers.lateUpdate || []) lateUpdate(1 / 60)
+    }
+    for (let i = 0; i < 90; i++) frame()
+    const view = new THREE.PerspectiveCamera(60, 16 / 9, .01, 100)
+    for (const delta of [-80, 80, 0]) {
+      client.control.pointer.delta.y = delta
+      for (let i = 0; i < 20; i++) {
+        frame()
+        view.position.copy(client.control.camera.position); view.quaternion.copy(client.control.camera.quaternion)
+        view.updateMatrixWorld(true)
+        let samples = 0
+        for (const along of [-.4, 0, .4, .65]) {
+          const point = new THREE.Vector3(0, along, 0).applyQuaternion(heldCue.quaternion).add(heldCue.position)
+          if (point.clone().applyMatrix4(view.matrixWorldInverse).z >= -.01) continue
+          assert.ok(Math.abs(point.project(view).x) < 1e-4, 'actual VRM eye-height camera centers the physical rack shaft')
+          samples++
+        }
+        assert.ok(samples > 0)
+      }
+    }
+    client.control.pointer.delta.y = 0
+    client.emit('destroy')
     instance.setScriptedPose(null)
     rack.emit('destroy')
   } finally {

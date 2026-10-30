@@ -1778,29 +1778,6 @@
     Little: [0.11225, 1.225, 1.85]
   };
   var rotation = (x, y = 0, z = 0) => new Q().setFromEuler(new E(x, y, z, "XYZ")).toArray();
-  var BODY_PARENTS = {
-    spine: "hips",
-    chest: "spine",
-    upperChest: "chest",
-    neck: "upperChest",
-    head: "neck",
-    rightShoulder: "upperChest",
-    rightUpperArm: "rightShoulder"
-  };
-  function bodyPoint(name, bones, body) {
-    if (name === "hips") return {
-      p: new V(...body.hips).add(new V(...bones.hips.position)),
-      q: new Q(...bones.hips.rotation)
-    };
-    let parent = BODY_PARENTS[name];
-    if (!body[name]) return bodyPoint(parent, bones, body);
-    while (!body[parent]) parent = BODY_PARENTS[parent];
-    const frame = bodyPoint(parent, bones, body);
-    const offset = new V(...body[name]).sub(new V(...body[parent]));
-    frame.p.add(offset.applyQuaternion(frame.q));
-    frame.q.multiply(new Q(...bones[name]?.rotation ?? [0, 0, 0, 1]));
-    return frame;
-  }
   function playerMeasurements(player) {
     const relative = (name) => {
       const matrix = player.getBoneTransform?.(name);
@@ -1840,13 +1817,6 @@
         palmLength: base && bridgeHand && bridgeMiddle ? base.clone().sub(bridgeHand).dot(bridgeMiddle.clone().sub(bridgeHand).normalize()) : null
       }];
     }));
-    const bodyNames = [
-      "hips",
-      ...Object.keys(BODY_PARENTS),
-      ...["left", "right"].flatMap((side) => [side + "UpperLeg", side + "LowerLeg", side + "Foot"])
-    ];
-    const body = Object.fromEntries(bodyNames.map((name) => [name, relative(name)?.toArray()]));
-    const sight = relative("rightEye") ?? head?.clone().add(new V(0.03 * height / 1.7, 0, 0));
     return {
       height,
       hipsY: hips?.y ?? height * 0.568,
@@ -1863,16 +1833,7 @@
       bridgeThumbLengths: [
         length("leftThumbMetacarpal", "leftThumbProximal", 0.03 * height / 1.8256),
         length("leftThumbProximal", "leftThumbDistal", 0.027 * height / 1.8256)
-      ],
-      body: [
-        "hips",
-        "head",
-        "rightUpperArm",
-        ...["left", "right"].flatMap((side) => [side + "UpperLeg", side + "LowerLeg", side + "Foot"])
-      ].every((name) => body[name]) && head.y - hips.y > 0.2 && length("leftUpperLeg", "leftLowerLeg", 0) > 0.15 ? body : null,
-      sight: sight?.toArray(),
-      gripUpperLength: length("rightUpperArm", "rightLowerArm", 0.26 * height / 1.8256),
-      gripLowerLength: length("rightLowerArm", "rightHand", 0.26 * height / 1.8256)
+      ]
     };
   }
   function playerAimPose(player, cuePosition, cueQuaternion, contactPosition, measurements = { height: 1.6686, hipsY: 0.94786, footY: 0.1023 }, table = null) {
@@ -2056,90 +2017,6 @@
         cueQuaternion.setFromUnitVectors(UP, cueDirection);
       }
     }
-    const bones = {
-      hips: { rotation: rotation(-lean), position: hipsOffset.toArray() },
-      spine: { rotation: rotation(-0.25) },
-      chest: { rotation: rotation(-0.18, -0.08) },
-      upperChest: { rotation: rotation(-0.08) },
-      neck: { rotation: rotation(0.5) },
-      head: { rotation: rotation(0.55, 0.08) },
-      leftUpperLeg: { rotation: upperLeg(0.05, -0.08) },
-      leftLowerLeg: { rotation: rotation(-knee) },
-      leftFoot: { rotation: foot(0.08) },
-      rightUpperLeg: { rotation: upperLeg(-0.08, 0.08) },
-      rightLowerLeg: { rotation: rotation(-knee) },
-      rightFoot: { rotation: foot(-0.1) }
-    };
-    if (table && bridgeType === "cloth" && measurements.body) {
-      const body = measurements.body;
-      hipsOffset.addScaledVector(alongCue.clone().applyQuaternion(inverse), -Math.min(0.08, (advance + step) * 0.5));
-      bones.hips.position = hipsOffset.toArray();
-      bones.hips.rotation = rotation(-0.8 - (height - 1.6686) * 0.2);
-      bones.spine.rotation = rotation(-0.5);
-      bones.chest.rotation = rotation(-0.3, -0.12);
-      bones.upperChest.rotation = rotation(-0.38);
-      bones.rightShoulder = { rotation: rotation(0, -0.95) };
-      const headView = inverse.clone().multiply(clothFrame).multiply(new Q().setFromAxisAngle(X, -0.55));
-      const gazeTurn = bodyPoint("upperChest", bones, body).q.clone().invert().multiply(headView);
-      bones.neck.rotation = new Q().slerp(gazeTurn, 0.2).toArray();
-      const neck = bodyPoint("neck", bones, body);
-      bones.head.rotation = neck.q.clone().invert().multiply(headView).toArray();
-      const headFrame = bodyPoint("head", bones, body);
-      const chin = headFrame.p.clone().add(new V(0, -0.03 * height, -0.035 * height).applyQuaternion(headFrame.q)).applyQuaternion(player.quaternion).add(player.position);
-      const sight = headFrame.p.clone().add(new V(...measurements.sight).sub(new V(...body.head)).applyQuaternion(headFrame.q)).applyQuaternion(player.quaternion).add(player.position);
-      const shaft = pivot.clone().addScaledVector(cueDirection, chin.clone().sub(pivot).dot(cueDirection));
-      const shift = across.clone().multiplyScalar(-sight.clone().sub(pivot).dot(across));
-      shift.y = shaft.y + 0.012 - chin.y + Math.max(0, contactPosition.y - pivot.y) * 0.4;
-      hipsOffset.add(shift.applyQuaternion(inverse));
-      bones.hips.position = hipsOffset.toArray();
-      const hipFrame = bodyPoint("hips", bones, body);
-      const forward = alongCue.clone().applyQuaternion(inverse);
-      const lateral = across.clone().applyQuaternion(inverse);
-      const width = Math.max(0.36, Math.abs(body.rightUpperArm[0] - body.hips[0]) * 2.1);
-      for (const side of ["left", "right"]) {
-        const upper = new V(...body[side + "UpperLeg"]);
-        const lower = new V(...body[side + "LowerLeg"]);
-        const ankle = new V(...body[side + "Foot"]);
-        const thigh = lower.clone().sub(upper), shin = ankle.clone().sub(lower);
-        const a = thigh.length(), b = shin.length();
-        const hip = upper.clone().sub(new V(...body.hips)).applyQuaternion(hipFrame.q).add(hipFrame.p);
-        const target = forward.clone().multiplyScalar(step + (side === "left" ? 0.12 : -0.08)).addScaledVector(lateral, width * (side === "left" ? -0.5 : 0.5));
-        target.y = ankle.y;
-        const horizontal = target.clone().sub(hip);
-        horizontal.y = 0;
-        const maxHorizontal = Math.sqrt(Math.max(0, (a + b - 3e-3) ** 2 - (hip.y - target.y) ** 2));
-        if (horizontal.length() > maxHorizontal) {
-          horizontal.setLength(maxHorizontal);
-          target.x = hip.x + horizontal.x;
-          target.z = hip.z + horizontal.z;
-        }
-        const direction = target.clone().sub(hip);
-        const span = direction.length();
-        direction.normalize();
-        const along = Math.max(0, Math.min(a, (a * a - b * b + span * span) / (2 * span)));
-        const pole = forward.clone().addScaledVector(lateral, side === "left" ? -0.2 : 0.2);
-        pole.addScaledVector(direction, -pole.dot(direction)).normalize();
-        const kneePoint = hip.clone().addScaledVector(direction, along).addScaledVector(pole, Math.sqrt(Math.max(0, a * a - along * along)));
-        const thighRotation = new Q().setFromUnitVectors(thigh.normalize(), kneePoint.clone().sub(hip).normalize());
-        const shinRotation = new Q().setFromUnitVectors(shin.normalize(), target.clone().sub(kneePoint).normalize());
-        bones[side + "UpperLeg"].rotation = hipFrame.q.clone().invert().multiply(thighRotation).toArray();
-        bones[side + "LowerLeg"].rotation = thighRotation.clone().invert().multiply(shinRotation).toArray();
-        const footFrame = inverse.clone().multiply(clothFrame).multiply(new Q().setFromAxisAngle(Y, side === "left" ? -0.15 : -0.65));
-        bones[side + "Foot"].rotation = shinRotation.invert().multiply(footFrame).toArray();
-      }
-      const shoulder = bodyPoint("rightUpperArm", bones, body).p.applyQuaternion(player.quaternion).add(player.position);
-      const contactCenter = pivot.clone().addScaledVector(cueDirection, -0.735 - 0.028575);
-      const up2 = UP.clone().addScaledVector(cueDirection, -UP.dot(cueDirection)).normalize();
-      const outward = up2.clone().cross(cueDirection.clone().negate()).normalize();
-      const elbow = contactCenter.clone().addScaledVector(outward, 0.034 * (measurements.handWidth ?? 0.061071) / 0.061071).addScaledVector(up2, 0.09 * (measurements.palmLength ?? 0.091586) / 0.091586).addScaledVector(UP, measurements.gripLowerLength);
-      const delta2 = elbow.sub(shoulder), projection = delta2.dot(cueDirection);
-      const discriminant = measurements.gripUpperLength ** 2 - delta2.lengthSq() + projection ** 2;
-      if (discriminant >= 0) gripOffset = Math.max(-0.68, Math.min(
-        0.1,
-        -projection - Math.sqrt(discriminant)
-      ));
-      gripPole.copy(UP).applyQuaternion(inverse);
-    }
     const grip = cuePosition.clone().addScaledVector(cueDirection, gripOffset);
     const bridge = pivot.clone().addScaledVector(alongCue, -bridgeDistance * Math.hypot(cueDirection.x, cueDirection.z)).addScaledVector(across, -bridgeWidth * 0.62);
     bridge.y = contactPosition.y - 0.028575 + 0.035 * bridgeScale;
@@ -2260,8 +2137,8 @@
             "YXZ"
           )));
         } else if (railSlideBridge) {
-          const slideSpread = finger === "Index" ? segment === "Proximal" ? -0.9 : -0.15 : spread;
-          const slideCurl = finger === "Index" ? segment === "Proximal" ? 0.15 : segment === "Intermediate" ? -1.15 : -0.25 : segment === "Proximal" ? -railCurl : 0;
+          const slideSpread = finger === "Index" ? -0.35 : spread;
+          const slideCurl = finger === "Index" ? segment === "Proximal" ? 0.15 : segment === "Intermediate" ? -0.5 : -0.7 : segment === "Proximal" ? -railCurl : 0;
           frame = clothFrame.clone().multiply(new Q().setFromEuler(new E(slideCurl, slideSpread, 0, "YXZ")));
         }
         fingers[finger + segment] = inverse.clone().multiply(frame).toArray();
@@ -2269,7 +2146,20 @@
     }
     return {
       bridgeType,
-      bones,
+      bones: {
+        hips: { rotation: rotation(-lean), position: hipsOffset.toArray() },
+        spine: { rotation: rotation(-0.25) },
+        chest: { rotation: rotation(-0.18, -0.08) },
+        upperChest: { rotation: rotation(-0.08) },
+        neck: { rotation: rotation(0.5) },
+        head: { rotation: rotation(0.55, 0.08) },
+        leftUpperLeg: { rotation: upperLeg(0.05, -0.08) },
+        leftLowerLeg: { rotation: rotation(-knee) },
+        leftFoot: { rotation: foot(0.08) },
+        rightUpperLeg: { rotation: upperLeg(-0.08, 0.08) },
+        rightLowerLeg: { rotation: rotation(-knee) },
+        rightFoot: { rotation: foot(-0.1) }
+      },
       hands: {
         left: {
           kind: "hand",
@@ -2305,7 +2195,7 @@
     let latest = app2.state?.pool, frames = [], clock = 0, control = null, idle = null;
     let pending = false, requestedAt = 0, shotPending = false, shotRequestSeq = -1, ping = 0, sinceAim = 0;
     let angle = 0, speed = 2.5, side = 0, top = 0;
-    let elevation = AIM_ELEVATION, floorY = 0;
+    let cameraOrbit = 0, floorY = 0, cueElevation = Math.atan(0.045);
     let aimStance = null;
     let placeX = -size.length / 4, placeY = 0;
     let cueHolders = latest?.cueHolders || [], aim = app2.state?.aim, posedPlayer = null;
@@ -2313,8 +2203,7 @@
     const volumeEvent = `billard:volume:${playChannel}`;
     world2.on(volumeEvent, (value) => sounds.setVolume(value));
     app2.emit(`${volumeEvent}:request`);
-    let poseMeasurements = null, savedCamera = null, cameraHold = null;
-    let aimCuePosition = null, aimCueAcross = null;
+    let poseMeasurements = null, savedCamera = null, cameraHold = null, aimCue = null;
     let aimCameraPosition = null, aimCameraTarget = null, strokePlayback = null, completedStrokeId = -1;
     const riseDuration = 1;
     let aimEntry = null, posedBody = false, poseEntryAt = null, aimCameraPending = false;
@@ -2400,7 +2289,7 @@
         if (posedPlayer === me.id && cameraHold) returnCamera();
       }
       poseMeasurements = null;
-      aimCuePosition = aimCueAcross = null;
+      aimCue = null;
       posedPlayer = null;
       posedBody = false;
       poseEntryAt = null;
@@ -2487,7 +2376,7 @@
             returnAt: null,
             holding: control.space.down,
             strokeId: latest.seq + 1,
-            position: control.camera.position.clone(),
+            position: aimCameraPosition?.clone() || control.camera.position.clone(),
             target: worldPosition(new V(ball[0], BALL_RADIUS + ball[2], -ball[1]))
           };
           if (aimEntry) aimEntry = {
@@ -2538,7 +2427,8 @@
       control.escape.onPress = () => stop();
       ui.active = true;
       sinceAim = 1;
-      elevation = AIM_ELEVATION;
+      cameraOrbit = 0;
+      cueElevation = Math.atan(0.045);
       aimStance = null;
       const local = me.position.clone().sub(app2.position).applyQuaternion(app2.quaternion.clone().invert());
       floorY = local.y < -0.35 ? local.y : -0.708;
@@ -2621,6 +2511,7 @@
     app2.emit(`${cueEvent}:request`);
     const axis = new V();
     const cameraRotation = new Q();
+    const orbitRotation = new Q();
     const cameraUp = new V(0, 1, 0);
     const worldPosition = (local) => local.clone().multiply(app2.scale).applyQuaternion(app2.quaternion).add(app2.position);
     const writeAimCamera = (camera, position, target) => {
@@ -2638,8 +2529,11 @@
           camera.position.addScaledVector(axis, (leftEye ? 0.06 : 0.03) * height / 1.7);
         }
       }
-      if (aimCuePosition && aimCueAcross)
-        camera.position.addScaledVector(aimCueAcross, aimCuePosition.clone().sub(camera.position).dot(aimCueAcross));
+      if (aimCue) {
+        const across = aimCue.across;
+        camera.position.addScaledVector(across, aimCue.position.clone().sub(camera.position).dot(across));
+        target = target.clone().addScaledVector(across, aimCue.position.clone().sub(target).dot(across));
+      }
       const look = target.clone().sub(camera.position);
       camera.quaternion.setFromEuler(new E(
         Math.atan2(look.y, Math.hypot(look.x, look.z)),
@@ -2647,6 +2541,17 @@
         0,
         "YXZ"
       ));
+      const eyeElevation = Math.atan2(-look.y, Math.hypot(look.x, look.z));
+      cameraOrbit = Math.max(
+        eyeElevation - 85 * Math.PI / 180,
+        Math.min(eyeElevation - cueElevation - 0.03, cameraOrbit)
+      );
+      if (cameraOrbit) {
+        axis.set(1, 0, 0).applyQuaternion(camera.quaternion);
+        orbitRotation.setFromAxisAngle(axis, cameraOrbit);
+        camera.position.sub(target).applyQuaternion(orbitRotation).add(target);
+        camera.quaternion.premultiply(orbitRotation);
+      }
       if (aimEntry) {
         if (aimEntry.at === null) {
           camera.position.copy(aimEntry.position);
@@ -2761,7 +2666,7 @@
         const pointer = control.pointer.delta;
         const turn = horizontal * dt + pointer.x * 3e-3;
         angle = Math.atan2(Math.sin(angle - turn), Math.cos(angle - turn));
-        elevation = Math.max(0.08, Math.min(0.75, elevation + pointer.y * 3e-3));
+        cameraOrbit -= pointer.y * 3e-3;
         if (latest?.scratched) {
           const forward = Number(control.keyW.down) - Number(control.keyS.down);
           const right = Number(control.keyD.down) - Number(control.keyA.down);
@@ -2788,7 +2693,7 @@
         }
         const ball = latest?.scratched ? [placeX, placeY, 0] : latest?.balls[0]?.p;
         if (ball) {
-          const pose = shotPose(ball, angle, side, top, elevation, speed);
+          const pose = shotPose(ball, angle, side, top, AIM_ELEVATION, speed);
           aimCameraPosition = worldPosition(pose.cameraPosition);
           aimCameraTarget = worldPosition(pose.cameraTarget);
           if (!poseMeasurements) poseMeasurements = playerMeasurements(me);
@@ -2816,7 +2721,7 @@
           });
         }
         ghost.active = false;
-        text.value = latest?.error || (latest?.scratched ? "Scratch \xB7 Mouse / \u2190 \u2192: orbit \xB7 WASD: move white ball\nClick / Space: confirm \xB7 R: re-rack \xB7 Esc: leave" : `Mouse: orbit / aim \xB7 Scroll back / closer: Power ${speed.toFixed(1)} m/s \xB7 W/S Top ${top.toFixed(2)} \xB7 A/D Side ${side.toFixed(2)}
+        text.value = latest?.error || (latest?.scratched ? "Scratch \xB7 Mouse / \u2190 \u2192: orbit \xB7 WASD: move white ball\nClick / Space: confirm \xB7 R: re-rack \xB7 Esc: leave" : `Mouse \u2190/\u2192: aim \xB7 \u2191/\u2193: orbit view \xB7 Scroll back / closer: Power ${speed.toFixed(1)} m/s \xB7 W/S Top ${top.toFixed(2)} \xB7 A/D Side ${side.toFixed(2)}
 Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
       }
       const shooter = latest?.owner;
@@ -2852,9 +2757,10 @@ Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
           poseMeasurements,
           { position: app2.position, quaternion: app2.quaternion, size }
         );
-        if (actor === me.id && poseMeasurements.body) {
-          aimCuePosition = cuePosition.clone();
-          aimCueAcross = new V(0, 1, 0).applyQuaternion(cueQuaternion).cross(cameraUp).normalize();
+        if (actor === me.id) {
+          const shaft = new V(0, 1, 0).applyQuaternion(cueQuaternion);
+          cueElevation = Math.atan2(-shaft.y, Math.hypot(shaft.x, shaft.z));
+          aimCue = { position: cuePosition.clone(), across: shaft.cross(cameraUp).normalize() };
         }
         if (predicted) avatarPose.root = {
           position: predicted.position.toArray(),
