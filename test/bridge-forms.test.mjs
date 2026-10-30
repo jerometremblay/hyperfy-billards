@@ -52,6 +52,31 @@ test('compact cloth bridge folds its outer fingers steeply and keeps its wrist i
   assert.ok(normal.finger('MiddleDistal').y > -.01, 'roomy shots keep the ordinary flat fingers')
 })
 
+test('compact bridge stays on the cloth closer to all four cushions and at corners', () => {
+  const frame = { size, position: new THREE.Vector3(12, 2, -8),
+    quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), .72) }
+  const gap = size.length / 2 - .95
+  const cases = [
+    [[-.95, .2, 0], 0], [[.95, .2, 0], Math.PI],
+    [[-.55, size.width / 2 - gap, 0], Math.PI * 1.5],
+    [[-.55, -size.width / 2 + gap, 0], Math.PI / 2],
+  ]
+  for (const x of [-1, 1]) for (const y of [-1, 1])
+    cases.push([[x * .93, y * (size.width / 2 - (size.length / 2 - .93)), 0], Math.atan2(-y, -x)])
+  for (const [ball, angle] of cases) for (const top of [-.45, 0, .45]) for (const side of [-.45, 0, .45]) {
+    const first = solve(ball, angle, 0, top, side)
+    assert.equal(first.pose.bridgeType, 'cloth-tight', `folded fingers still have room: ball=${ball}, angle=${angle}, top=${top}, side=${side}`)
+    assert.ok(Math.abs(first.wrist.x) < size.length / 2 && Math.abs(first.wrist.z) < size.width / 2,
+      'compact wrist stays inside both cushions')
+    const moved = solve(ball, angle, physics.STROKE_CONTACT, top, side, frame)
+    assert.equal(moved.pose.bridgeType, 'cloth-tight')
+    assert.ok(moved.wrist.clone().sub(frame.position).applyQuaternion(frame.quaternion.clone().invert())
+      .distanceTo(first.wrist) < 1e-8, 'compact bridge stays planted through the stroke on a rotated table')
+  }
+  assert.equal(solve([-.97, .2, 0], 0).pose.bridgeType, 'rail-slide',
+    'move to the rail when the folded fingers no longer have enough room before the ball')
+})
+
 test('farther rail bridge rests the shaft directly on the rail and puts the index over it', () => {
   for (const top of [-.45, 0, .45]) {
     const result = solve([-1.01, .2, 0], 0, 0, top)

@@ -199,14 +199,21 @@ export function playerAimPose(player, cuePosition, cueQuaternion, contactPositio
     const railDistance = Math.max(0.08, cushionDistance) + 0.085
     if (railBlend > 0) {
       // Pull the fingers in and shorten the bridge before moving onto the rail.
-      const shortDistance = Math.min(bridgeDistance, cushionDistance - 0.045 * bridgeScale)
+      const shortWidth = bridgeWidth * 0.75 + 0.004
+      const shortCenter = point.clone().addScaledVector(lateral, -bridgeWidth * 0.62)
+      // Fit the heel and folded fingers against both cushions, including corners.
+      const shortExitX = Math.abs(back.x) < 1e-9 ? Infinity :
+        (Math.sign(back.x) * (halfX - 0.016 - Math.abs(lateral.x) * shortWidth) - shortCenter.x) / back.x
+      const shortExitZ = Math.abs(back.z) < 1e-9 ? Infinity :
+        (Math.sign(back.z) * (halfZ - 0.016 - Math.abs(lateral.z) * shortWidth) - shortCenter.z) / back.z
+      const shortDistance = Math.min(bridgeDistance, Math.min(shortExitX, shortExitZ) - 0.012 * bridgeScale)
       const shortWrist = point.clone().addScaledVector(direction, -shortDistance)
         .addScaledVector(lateral, -bridgeWidth * 0.62)
       const shortHeel = shortWrist.clone().addScaledVector(direction, -0.012 * bridgeScale)
       const shortTips = shortWrist.clone().addScaledVector(direction,
         (measurements.bridgePalmLength ?? 0.091586 * bridgeScale) + 0.075 * bridgeScale)
-      const shortWidth = bridgeWidth * 0.75 + 0.004
-      compactBridge = shortDistance >= (0.21 + 0.03 * (1 - bridgeThumbScale)) * bridgeScale &&
+      // Leave room between the folded fingers and the cue ball.
+      compactBridge = shortDistance >= (0.185 + 0.03 * (1 - bridgeThumbScale)) * bridgeScale &&
         halfX - Math.max(Math.abs(shortHeel.x), Math.abs(shortTips.x)) - Math.abs(lateral.x) * shortWidth > 0.012 &&
         halfZ - Math.max(Math.abs(shortHeel.z), Math.abs(shortTips.z)) - Math.abs(lateral.z) * shortWidth > 0.012
       if (compactBridge) {
