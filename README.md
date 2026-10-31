@@ -156,12 +156,17 @@ avatar's low aiming stance. There is no trajectory line.
   hidden locally until the return finishes, with both arms and hands visible.
   Other players see the full rising avatar. Normal movement remains available; mouse look, zoom and wall collision
   resume with the native camera. Click Play on the table again for your next shot.
-- After a scratch: mouse or left/right arrows orbit the white ball as usual.
-  WASD moves the actual white-ball mesh across the cloth relative to the view
-  (W forward, S backward, A left, D right), with the camera following its position.
-  Other nearby players see the white ball while it is being positioned, including
-  players who join during placement. Left click or Space confirms placement and
-  continues aiming; Escape cancels the shared preview.
+- After a scratch: move the mouse horizontally or vertically to orbit the white
+  ball; left/right arrows orbit horizontally. The ball and placing arm stay still
+  while the view orbits.
+  WASD moves the real white ball directly across the cloth relative to the view
+  (W forward, S backward, A left, D right) at 1.5 m/s. The avatar keeps the left arm
+  extended in front, moves the body with the ball, and grips the upright cue
+  beside the leaning torso with the right hand. Other nearby players, including late joins, see the same placement
+  posture and ball position.
+  Left click or Space confirms
+  placement and immediately starts entering the ordinary shooting stance.
+  Escape cancels the shared preview.
   The server rejects occupied or out-of-bounds positions.
 - R: re-rack while stopped. Escape: release the camera and movement controls.
 

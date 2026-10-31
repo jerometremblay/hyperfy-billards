@@ -222,6 +222,38 @@ test('carrying arm damps walking sway while the cue stays inside closed fingers 
     rack.world.emit('billard:cue-pose', { playerId: 'alice', tableId: 'table', clear: true })
     tableActor.setPose(null, { duration: 1 })
     tick(70)
+    const placementMeasurements = physics.playerMeasurements(actor)
+    for (const ball of [[0, 0, 0], [-.8, .2, 0], [.3, .5, 0], [1, 0, 0]]) {
+      const stance = physics.placementStance(ball, physics.dimensions('8'), -.708)
+      stance.position.y += .762
+      raw.base.position.copy(stance.position)
+      raw.base.quaternion.copy(stance.quaternion)
+      const contact = new THREE.Vector3(ball[0], .762 + physics.BALL_RADIUS, -ball[1])
+      const placement = physics.playerPlacementPose(stance, contact, placementMeasurements)
+      assert.equal(tableActor.setPose(placement.pose, { duration: .25 }), true)
+      rack.world.emit('billard:cue-pose', { playerId: 'alice', tableId: 'table',
+        position: placement.cuePosition.toArray(), quaternion: placement.cueQuaternion.toArray(), followGrip: true })
+      tick(30)
+      const target = new THREE.Vector3(...placement.pose.hands.right.p)
+        .applyQuaternion(stance.quaternion).add(stance.position)
+      assert.ok(bone('rightHand').distanceTo(target) < .005, 'placing the ball leaves a reachable right-hand grip')
+      const shaft = new THREE.Vector3(0, 1, 0).applyQuaternion(cue.quaternion)
+      let thumbClearance = Infinity
+      scene.updateMatrixWorld(true)
+      for (const { mesh, i } of thumbVertices) {
+        const point = new THREE.Vector3().fromBufferAttribute(mesh.geometry.attributes.position, i)
+        mesh.applyBoneTransform(i, point).applyMatrix4(mesh.matrixWorld).sub(cue.position)
+        point.addScaledVector(shaft, -point.dot(shaft))
+        thumbClearance = Math.min(thumbClearance, point.length())
+      }
+      assert.ok(thumbClearance < .025,
+        `the real placing thumb stays beside the upright shaft (${thumbClearance})`)
+      rack.world.emit('billard:cue-pose', { playerId: 'alice', tableId: 'table', clear: true })
+      tableActor.setPose(null, { duration: 1 })
+      raw.base.position.set(0, 0, 0)
+      raw.base.quaternion.set(0, 0, 0, 1)
+      tick(70)
+    }
     rack.emit('cue-holders', [null, null, null, null])
     tick(2)
     assert.equal(raw.scriptedPoseOwner, null, 'returning the cue releases the finger pose')

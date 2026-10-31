@@ -31,15 +31,19 @@ function clients() {
   bob.app.deliver = (event, body) => server.emit(event, body, 'socket-b')
   alice.created.find(n => n.name === 'prim' && n.opacity === 0).onPointerDown({ button: 'left' })
   const white = client => client.created.find(n => n.name === 'group')
-  return { server, players, alice, bob, white }
+  const marker = client => client.created.find(n => n.name === 'prim' && n.opacity === 0.4)
+  return { server, players, alice, bob, white, marker }
 }
 
 test('observers and late joins see placement without restoring the physical ball or staling confirmation', () => {
-  const { server, players, alice, bob, white } = clients()
+  const { server, players, alice, bob, white, marker } = clients()
   // The claim snapshot supplies the initial preview before any movement packets.
   bob.emit('update', 0.2)
   assert.equal(white(bob).active, true)
   assert.equal(white(bob).position.x, -physics.dimensions().length / 4)
+  assert.equal(white(bob).position.y, physics.BALL_RADIUS)
+  assert.equal(marker(bob).active, false)
+  assert.ok(players[0].pose.hands.left)
   alice.emit('update', 0.1)
   const seq = server.app.state.pool.seq
   const pocketPosition = [...server.app.state.pool.balls[0].p]
@@ -50,6 +54,8 @@ test('observers and late joins see placement without restoring the physical ball
     bob.emit('update', 0.1)
     assert.equal(white(bob).active, true)
     assert.ok(white(alice).position.distanceTo(white(bob).position) < 1e-8)
+    assert.equal(white(alice).position.y, physics.BALL_RADIUS)
+    assert.equal(white(bob).position.y, physics.BALL_RADIUS)
   }
   alice.control.keyW.down = false
   assert.equal(server.app.state.pool.seq, seq, 'preview packets preserve the place sequence')
@@ -58,17 +64,18 @@ test('observers and late joins see placement without restoring the physical ball
   assert.equal(server.handlers.update?.length || 0, 0, 'placement does not wake server physics')
   assert.equal(bob.activeControl, null)
   assert.equal(bob.handlers.update?.length || 0, 0, 'observers sleep between preview packets')
-  const late = harness({ players: [players[1]], state: structuredClone(server.app.state) })
+  const late = harness({ players: [players[1], players[0]], state: structuredClone(server.app.state) })
   late.emit('update', 0.1)
   assert.equal(white(late).active, true)
   assert.ok(white(late).position.distanceTo(white(alice).position) < 1e-8)
   const selected = white(alice).position.clone()
   alice.control.space.onPress()
-  bob.emit('update', 0.2)
+  bob.emit('update', 0.01)
   assert.equal(server.app.state.pool.scratched, false)
   assert.equal(server.app.state.aim.placement, null)
   assert.ok(white(bob).position.distanceTo(selected) < 1e-8)
   assert.equal(white(bob).active, true)
+  assert.equal(players[0].poseOptionsCalls.at(-1).duration, 1, 'observers see the shooting stance begin at confirmation')
 })
 
 test('cancel, cue return, lease expiry and re-rack clear the shared placement preview', () => {

@@ -77,6 +77,63 @@ export function playerMeasurements(player) {
   }
 }
 
+export function playerPlacementPose(player, ball, measurements, radius = 0.028575) {
+  const { height, hipsY } = measurements
+  const inverse = player.quaternion.clone().invert()
+  const local = point => point.clone().sub(player.position).applyQuaternion(inverse)
+  const forward = FORWARD.clone().applyQuaternion(player.quaternion)
+  // Keep the arm extended at one distance. Move the rendered body with the
+  // cloth ball while the authoritative capsule remains outside the table.
+  const origin = ball.clone().addScaledVector(forward, -1.1 * height / 1.6686)
+  origin.y = player.position.y
+  const world = point => point.applyQuaternion(player.quaternion).add(origin)
+  // Keep the upright cue beside the leaning torso, within the rear arm's reach.
+  const cueDirection = world(new Vector3(0.12, 1, -0.12)).sub(origin).normalize()
+  const cueQuaternion = new Quaternion().setFromUnitVectors(UP, cueDirection)
+  const cuePosition = world(new Vector3(0.32 * height / 1.6686, hipsY, -0.47 * height / 1.6686))
+    .addScaledVector(cueDirection, 0.28)
+  const carry = playerAimPose(player, cuePosition, cueQuaternion, ball, measurements)
+  // Placing reaches the ball itself, farther forward than an aiming bridge.
+  // Reuse the existing long-reach body/leg solution to make that extra reach.
+  const reach = ball.clone().addScaledVector(forward, 0.6)
+  const bodyCue = reach.clone().addScaledVector(forward, -0.8)
+  const body = playerAimPose({ position: origin, quaternion: player.quaternion }, bodyCue,
+    new Quaternion().setFromUnitVectors(UP, forward), reach, measurements).bones
+  body.chest.rotation = rotation(-0.18)
+  body.hips.position[2] -= 0.17 * height / 1.6686
+  const offset = local(origin)
+  body.hips.position = new Vector3(...body.hips.position).add(offset).toArray()
+  const palmLength = measurements.bridgePalmLength ?? 0.091586 * height / 1.8256
+  const left = new Vector3(-1, 0, 0).applyQuaternion(player.quaternion)
+  const handOffset = (measurements.bridgeWidth ?? 0.061071 * height / 1.8256) * 0.65 + radius
+  // Line the left shoulder up behind the hand rather than reaching sideways.
+  body.hips.position[0] = offset.x + 0.088 * height - handOffset
+  // Guide the ball from its side so the palm cannot hide the chosen position.
+  const wrist = ball.clone().addScaledVector(forward, -palmLength * 0.65)
+    .addScaledVector(left, handOffset)
+    .addScaledVector(UP, radius + 0.006)
+  // Cup the fingers beside the ball and keep the thumb on its inner side.
+  const fingers = {}
+  for (const [finger, spread] of [['Index', -0.12], ['Middle', 0], ['Ring', 0.12], ['Little', 0.25]]) {
+    for (const [segment, curl] of [['Proximal', -0.65], ['Intermediate', -1.35], ['Distal', -1.8]])
+      fingers[finger + segment] = new Quaternion().setFromEuler(new Euler(curl, spread, 0)).toArray()
+  }
+  for (const [segment, curl] of [['Metacarpal', 0.65], ['Proximal', 0.4], ['Distal', 0.2]])
+    fingers['Thumb' + segment] = new Quaternion().setFromEuler(new Euler(curl, -0.65, 0)).toArray()
+  return {
+    cuePosition, cueQuaternion,
+    pose: {
+      root: { position: player.position.toArray(), quaternion: player.quaternion.toArray() },
+      bones: body,
+      hands: {
+        left: { kind: 'hand', p: local(wrist).toArray(), w: [0, 0, 0, 1],
+          f: fingers, pole: [-0.5, -0.4, -0.3] },
+        right: carry.hands.right,
+      },
+    },
+  }
+}
+
 export function playerAimPose(player, cuePosition, cueQuaternion, contactPosition,
   measurements = { height: 1.6686, hipsY: 0.94786, footY: 0.1023 }, table = null) {
   const inverse = player.quaternion.clone().invert()

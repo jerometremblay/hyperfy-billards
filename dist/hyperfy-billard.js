@@ -1381,6 +1381,16 @@
 
   // src/aim.js
   var AIM_ELEVATION = Math.atan2(0.14, 0.68);
+  function placementStance(position, size, floorY) {
+    const x = position[0], z = -position[1];
+    const end = size.length / 2 - Math.abs(x) < size.width / 2 - Math.abs(z);
+    const outward = end ? new V(x < 0 ? -1 : 1, 0, 0) : new V(0, 0, z < 0 ? -1 : 1);
+    const distance = (end ? size.length / 2 - Math.abs(x) : size.width / 2 - Math.abs(z)) + 0.52;
+    return {
+      position: new V(x, floorY, z).addScaledVector(outward, distance),
+      quaternion: new Q().setFromUnitVectors(new V(0, 0, -1), outward.negate())
+    };
+  }
   function avatarStance(position, angle, size, floorY, cueOffset = 0.28) {
     const forward = new V(Math.cos(angle), 0, -Math.sin(angle));
     const across = new V(Math.sin(angle), 0, Math.cos(angle));
@@ -1497,7 +1507,7 @@
     };
     const moveStance = (player, angle, placement = null) => {
       const ball = placement ? [placement.x, placement.y, 0] : sim.table.cueball.pos.toArray();
-      const stance = avatarStance(ball, angle, sim.size, stanceFloorY, stanceCueOffset);
+      const stance = placement ? placementStance(ball, sim.size, stanceFloorY) : avatarStance(ball, angle, sim.size, stanceFloorY, stanceCueOffset);
       const position = stance.position.multiply(app2.scale).applyQuaternion(app2.quaternion).add(app2.position);
       const quaternion = app2.quaternion.clone().multiply(stance.quaternion);
       if (!lastStance || lastStance.position.distanceTo(position) > 1e-7 || lastStance.quaternion.angleTo(quaternion) > 1e-7) {
@@ -1834,6 +1844,62 @@
         length("leftThumbMetacarpal", "leftThumbProximal", 0.03 * height / 1.8256),
         length("leftThumbProximal", "leftThumbDistal", 0.027 * height / 1.8256)
       ]
+    };
+  }
+  function playerPlacementPose(player, ball, measurements, radius = 0.028575) {
+    const { height, hipsY } = measurements;
+    const inverse = player.quaternion.clone().invert();
+    const local = (point) => point.clone().sub(player.position).applyQuaternion(inverse);
+    const forward = FORWARD.clone().applyQuaternion(player.quaternion);
+    const origin = ball.clone().addScaledVector(forward, -1.1 * height / 1.6686);
+    origin.y = player.position.y;
+    const world2 = (point) => point.applyQuaternion(player.quaternion).add(origin);
+    const cueDirection = world2(new V(0.12, 1, -0.12)).sub(origin).normalize();
+    const cueQuaternion = new Q().setFromUnitVectors(UP, cueDirection);
+    const cuePosition = world2(new V(0.32 * height / 1.6686, hipsY, -0.47 * height / 1.6686)).addScaledVector(cueDirection, 0.28);
+    const carry = playerAimPose(player, cuePosition, cueQuaternion, ball, measurements);
+    const reach = ball.clone().addScaledVector(forward, 0.6);
+    const bodyCue = reach.clone().addScaledVector(forward, -0.8);
+    const body = playerAimPose(
+      { position: origin, quaternion: player.quaternion },
+      bodyCue,
+      new Q().setFromUnitVectors(UP, forward),
+      reach,
+      measurements
+    ).bones;
+    body.chest.rotation = rotation(-0.18);
+    body.hips.position[2] -= 0.17 * height / 1.6686;
+    const offset = local(origin);
+    body.hips.position = new V(...body.hips.position).add(offset).toArray();
+    const palmLength = measurements.bridgePalmLength ?? 0.091586 * height / 1.8256;
+    const left = new V(-1, 0, 0).applyQuaternion(player.quaternion);
+    const handOffset = (measurements.bridgeWidth ?? 0.061071 * height / 1.8256) * 0.65 + radius;
+    body.hips.position[0] = offset.x + 0.088 * height - handOffset;
+    const wrist = ball.clone().addScaledVector(forward, -palmLength * 0.65).addScaledVector(left, handOffset).addScaledVector(UP, radius + 6e-3);
+    const fingers = {};
+    for (const [finger, spread] of [["Index", -0.12], ["Middle", 0], ["Ring", 0.12], ["Little", 0.25]]) {
+      for (const [segment, curl] of [["Proximal", -0.65], ["Intermediate", -1.35], ["Distal", -1.8]])
+        fingers[finger + segment] = new Q().setFromEuler(new E(curl, spread, 0)).toArray();
+    }
+    for (const [segment, curl] of [["Metacarpal", 0.65], ["Proximal", 0.4], ["Distal", 0.2]])
+      fingers["Thumb" + segment] = new Q().setFromEuler(new E(curl, -0.65, 0)).toArray();
+    return {
+      cuePosition,
+      cueQuaternion,
+      pose: {
+        root: { position: player.position.toArray(), quaternion: player.quaternion.toArray() },
+        bones: body,
+        hands: {
+          left: {
+            kind: "hand",
+            p: local(wrist).toArray(),
+            w: [0, 0, 0, 1],
+            f: fingers,
+            pole: [-0.5, -0.4, -0.3]
+          },
+          right: carry.hands.right
+        }
+      }
     };
   }
   function playerAimPose(player, cuePosition, cueQuaternion, contactPosition, measurements = { height: 1.6686, hipsY: 0.94786, footY: 0.1023 }, table = null) {
@@ -2544,6 +2610,12 @@
         0,
         "YXZ"
       ));
+      if (control && latest?.scratched) {
+        const direction = look.clone().applyQuaternion(app2.quaternion.clone().invert());
+        orbitRotation.setFromAxisAngle(cameraUp, angle - Math.atan2(-direction.z, direction.x));
+        camera.position.sub(target).applyQuaternion(orbitRotation).add(target);
+        camera.quaternion.premultiply(orbitRotation);
+      }
       const eyeElevation = Math.atan2(-look.y, Math.hypot(look.x, look.z));
       cameraOrbit = Math.max(
         eyeElevation - 85 * Math.PI / 180,
@@ -2673,7 +2745,7 @@
         if (latest?.scratched) {
           const forward = Number(control.keyW.down) - Number(control.keyS.down);
           const right = Number(control.keyD.down) - Number(control.keyA.down);
-          const distance = dt * 0.5 / Math.max(1, Math.hypot(forward, right));
+          const distance = dt * 1.5 / Math.max(1, Math.hypot(forward, right));
           placeX = Math.max(-size.length / 2 + 2 * BALL_RADIUS, Math.min(
             size.length / 2 - 2 * BALL_RADIUS,
             placeX + (Math.cos(angle) * forward + Math.sin(angle) * right) * distance
@@ -2682,8 +2754,6 @@
             size.width / 2 - 2 * BALL_RADIUS,
             placeY + (Math.sin(angle) * forward - Math.cos(angle) * right) * distance
           ));
-          balls[0].active = true;
-          balls[0].position.set(placeX, BALL_RADIUS, -placeY);
         } else {
           speed = Math.max(0.1, Math.min(5, speed + vertical * dt - control.scrollDelta.value * 0.01));
           side += (Number(control.keyD.down) - Number(control.keyA.down)) * dt * 0.3;
@@ -2700,13 +2770,7 @@
           aimCameraPosition = worldPosition(pose.cameraPosition);
           aimCameraTarget = worldPosition(pose.cameraTarget);
           if (!poseMeasurements) poseMeasurements = playerMeasurements(me);
-          const stance = avatarStance(
-            ball,
-            angle,
-            size,
-            aim?.floorY ?? floorY,
-            aim?.cueOffset ?? poseMeasurements.cueOffset
-          );
+          const stance = latest.scratched ? placementStance(ball, size, aim?.floorY ?? floorY) : avatarStance(ball, angle, size, aim?.floorY ?? floorY, aim?.cueOffset ?? poseMeasurements.cueOffset);
           aimStance = {
             position: worldPosition(stance.position),
             quaternion: app2.quaternion.clone().multiply(stance.quaternion)
@@ -2723,15 +2787,39 @@
             placement: latest?.scratched ? { x: placeX, y: placeY } : null
           });
         }
-        ghost.active = false;
         text.value = latest?.error || (latest?.scratched ? "Scratch \xB7 Mouse / \u2190 \u2192: orbit \xB7 WASD: move white ball\nClick / Space: confirm \xB7 R: re-rack \xB7 Esc: leave" : `Mouse \u2190/\u2192: aim \xB7 \u2191/\u2193: orbit view \xB7 Scroll back / closer: Power ${speed.toFixed(1)} m/s \xB7 W/S Top ${top.toFixed(2)} \xB7 A/D Side ${side.toFixed(2)}
 Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
       }
       const shooter = latest?.owner;
-      if (nearby && shooter && shooter !== me.id && latest.scratched && !latest.moving && aim?.playerId === shooter && aim.placement) {
+      const placing = shooter && latest.scratched && !latest.moving && (shooter === me.id ? !!control : aim?.playerId === shooter && aim.placement);
+      const placementActor = placing ? shooter : null;
+      const placementPlayer = placementActor && world2.getPlayer(placementActor);
+      if (nearby && placementActor && cueHolders.includes(placementActor)) {
+        const selected = placementActor === me.id ? [placeX, placeY, 0] : [aim.placement.x, aim.placement.y, 0];
         balls[0].active = true;
-        balls[0].position.set(aim.placement.x, BALL_RADIUS, -aim.placement.y);
+        balls[0].position.set(selected[0], BALL_RADIUS, -selected[1]);
+        const ball = worldPosition(new V(selected[0], BALL_RADIUS, -selected[1]));
+        if (placementPlayer) {
+          if (posedPlayer && posedPlayer !== placementActor) clearPose();
+          if (!poseMeasurements) poseMeasurements = playerMeasurements(placementPlayer);
+          const stance = placementActor === me.id && aimStance || placementPlayer;
+          const placement = playerPlacementPose(stance, ball, poseMeasurements, BALL_RADIUS * app2.scale.y);
+          if (placementActor !== me.id) delete placement.pose.root;
+          const entering = posedPlayer !== placementActor;
+          placementPlayer.setPose?.(placement.pose, { duration: entering ? 0.25 : 0 });
+          posedPlayer = placementActor;
+          posedBody = false;
+          aimCue = null;
+          app2.emit(poseEvent, {
+            playerId: placementActor,
+            tableId: app2.instanceId,
+            position: placement.cuePosition.toArray(),
+            quaternion: placement.cueQuaternion.toArray(),
+            followGrip: true
+          });
+        }
       }
+      ghost.active = false;
       const aiming = shooter && !latest.moving && !latest.scratched && (shooter === me.id ? !!control : aim?.playerId === shooter);
       const actor = stroke?.playerId || (aiming ? shooter : null);
       const player = actor && world2.getPlayer(actor);
@@ -2787,13 +2875,7 @@ Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
           quaternion: cueQuaternion.toArray(),
           followGrip: clock < cueEntryUntil
         });
-      } else if (control && latest?.scratched && aimStance) {
-        posedPlayer = me.id;
-        me.setPose?.({ root: {
-          position: aimStance.position.toArray(),
-          quaternion: aimStance.quaternion.toArray()
-        } });
-      } else if (!shotPending) clearPose();
+      } else if (!placementActor && !shotPending) clearPose();
       if (cameraHold) {
         if (cameraHold.returnAt === null && !shotPending && !stroke && posedPlayer !== me.id) returnCamera();
         if (cameraHold.returnAt !== null && clock - cameraHold.returnAt > 1e-8) {

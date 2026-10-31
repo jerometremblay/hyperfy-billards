@@ -3,6 +3,19 @@ import { BALL_RADIUS as R } from './simulation.js'
 
 // All poses are table-local (+Y up, physics +Y maps to -Z).
 export const AIM_ELEVATION = Math.atan2(0.14, 0.68)
+export function placementStance(position, size, floorY) {
+  // Place from the nearest rail; orbiting the view must not require reaching
+  // across the entire length of the table with the ball in hand.
+  const x = position[0], z = -position[1]
+  const end = size.length / 2 - Math.abs(x) < size.width / 2 - Math.abs(z)
+  const outward = end ? new Vector3(x < 0 ? -1 : 1, 0, 0) :
+    new Vector3(0, 0, z < 0 ? -1 : 1)
+  const distance = (end ? size.length / 2 - Math.abs(x) : size.width / 2 - Math.abs(z)) + 0.52
+  return {
+    position: new Vector3(x, floorY, z).addScaledVector(outward, distance),
+    quaternion: new Quaternion().setFromUnitVectors(new Vector3(0, 0, -1), outward.negate()),
+  }
+}
 export function avatarStance(position, angle, size, floorY, cueOffset = 0.28) {
   const forward = new Vector3(Math.cos(angle), 0, -Math.sin(angle))
   const across = new Vector3(Math.sin(angle), 0, Math.cos(angle))

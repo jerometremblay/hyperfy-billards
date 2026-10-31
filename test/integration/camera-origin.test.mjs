@@ -1,7 +1,7 @@
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { hyperfyRoot } from '../../tools/hyperfy.mjs'
@@ -12,6 +12,7 @@ await build({ stdin: { contents: "export * as THREE from 'three'; export { Clien
   bundle: true, format: 'esm', platform: 'node', outfile: `${temp}/native.mjs` })
 const { THREE, ClientControls } = await import(pathToFileURL(`${temp}/native.mjs`))
 after(() => rm(temp, { recursive: true, force: true }))
+const source = process.env.BILLARD_CLIENT_SCRIPT ? await readFile(process.env.BILLARD_CLIENT_SCRIPT, 'utf8') : undefined
 
 function session(zoom, yaw) {
   const nativeWorld = { rig: new THREE.Object3D(), camera: new THREE.Object3D() }
@@ -23,7 +24,7 @@ function session(zoom, yaw) {
   nativePlayer.camera.write = true
   const authority = player('alice'), actor = player('alice')
   const server = harness({ server: true, players: [authority], cueHolders: ['alice'] })
-  const client = harness({ players: [actor], state: structuredClone(server.app.state) })
+  const client = harness({ source, players: [actor], state: structuredClone(server.app.state) })
   const requests = [], replies = []
   client.app.deliver = (event, data) => requests.push([event, data])
   server.app.deliver = (event, data) => replies.push([event, data])
@@ -138,6 +139,49 @@ test('native camera orbits the white ball vertically without moving the player p
     const offset = s.view().sub(ball)
     assert.ok(Math.abs(Math.atan2(offset.y, Math.hypot(offset.x, offset.z)) - Math.atan(.045) - .03) < 1e-8,
       'native rendered view stops at the lower limit')
+    s.client.emit('destroy')
+  }
+})
+
+test('native placement camera orbits in every mouse direction while the ball and extended arm stay still', () => {
+  for (const fps of [30, 60, 144]) {
+    const s = session(2.7, -.7)
+    const state = structuredClone(s.server.app.state.pool)
+    state.seq++
+    state.scratched = true
+    state.balls[0].state = 'InPocket'
+    s.client.emit('pool:snapshot', state)
+    s.surface.onPointerDown({ button: 'left' })
+    const claim = s.requests.find(([name]) => name === 'pool:claim')[1]
+    s.client.emit('pool:snapshot', { ...state, seq: state.seq + 1, owner: 'alice',
+      aim: { playerId: 'alice', angle: claim.angle, floorY: -.708, cueOffset: .28,
+        placement: { x: -physics.dimensions().length / 4, y: 0 }, side: 0, top: 0, speed: 2.5 } })
+    for (let frame = 0; frame <= fps + 1; frame++) {
+      s.client.emit('update', 1 / fps)
+      s.controls.postLateUpdate()
+    }
+    const white = s.client.created.find(n => n.name === 'group')
+    const selected = white.position.clone()
+    const ball = selected.clone().add(s.client.app.position)
+    const radius = s.view().distanceTo(ball), pose = structuredClone(s.actor.pose)
+    const control = s.client.control
+    for (const [x, y] of [[120, 0], [-120, 0], [0, 35], [0, -35], [80, 20], [-80, -20]]) {
+      const before = s.view(), offset = before.clone().sub(ball)
+      const yaw = Math.atan2(-offset.z, offset.x)
+      control.pointer.delta.set(x, y, 0)
+      s.client.emit('update', 1 / fps)
+      control.pointer.delta.set(0, 0, 0)
+      s.controls.postLateUpdate()
+      assert.ok(s.view().distanceTo(before) > .02, `${fps} FPS: mouse ${x}, ${y} moves the native placement view`)
+      assert.ok(Math.abs(s.view().distanceTo(ball) - radius) < 1e-8, 'orbit keeps the eye-to-ball distance')
+      const current = s.view().sub(ball)
+      const turn = Math.atan2(-current.z, current.x) - yaw + x * .003
+      assert.ok(Math.abs(Math.atan2(Math.sin(turn), Math.cos(turn))) < 1e-8, 'horizontal input reaches the rendered camera')
+      assert.ok(new THREE.Vector3(0, 0, -1).applyQuaternion(s.nativeWorld.rig.quaternion)
+        .dot(ball.clone().sub(s.view()).normalize()) > 1 - 1e-8, 'the white ball remains centered')
+      assert.ok(white.position.equals(selected), 'camera orbit never changes the selected placement')
+      assert.deepEqual(structuredClone(s.actor.pose), pose, 'camera orbit preserves the extended arm and body')
+    }
     s.client.emit('destroy')
   }
 })

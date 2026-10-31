@@ -1,6 +1,6 @@
 import { Euler } from 'three'
 import { Simulation, STEP, BALL_RADIUS } from './simulation.js'
-import { avatarStance } from './aim.js'
+import { avatarStance, placementStance } from './aim.js'
 import { CUE_EVENT, watchCues } from './cues.js'
 import { STROKE_CONTACT, STROKE_END } from './stroke.js'
 
@@ -49,7 +49,8 @@ export function startServer(world, app, preset, rollingResistance) {
   }
   const moveStance = (player, angle, placement = null) => {
     const ball = placement ? [placement.x, placement.y, 0] : sim.table.cueball.pos.toArray()
-    const stance = avatarStance(ball, angle, sim.size, stanceFloorY, stanceCueOffset)
+    const stance = placement ? placementStance(ball, sim.size, stanceFloorY) :
+      avatarStance(ball, angle, sim.size, stanceFloorY, stanceCueOffset)
     const position = stance.position.multiply(app.scale).applyQuaternion(app.quaternion).add(app.position)
     const quaternion = app.quaternion.clone().multiply(stance.quaternion)
     if (!lastStance || lastStance.position.distanceTo(position) > 1e-7 ||

@@ -2,8 +2,8 @@ import { Vector3, Quaternion, Euler } from 'three'
 import { BALL_RADIUS as R } from './simulation.js'
 import { createSounds } from './sound.js'
 import { CUE_EVENT, POSE_EVENT, watchCues } from './cues.js'
-import { shotPose, avatarStance, AIM_ELEVATION } from './aim.js'
-import { playerAimPose, playerMeasurements } from './player-pose.js'
+import { shotPose, avatarStance, placementStance, AIM_ELEVATION } from './aim.js'
+import { playerAimPose, playerPlacementPose, playerMeasurements } from './player-pose.js'
 import { strokePose, STROKE_END } from './stroke.js'
 
 export function startClient(world, app, { balls, ghost, surfaceTarget, size, playChannel, soundSources }) {
@@ -336,6 +336,14 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     const look = target.clone().sub(camera.position)
     camera.quaternion.setFromEuler(new Euler(
       Math.atan2(look.y, Math.hypot(look.x, look.z)), Math.atan2(-look.x, -look.z), 0, 'YXZ'))
+    // Placement keeps the avatar at the rail, so turn the view around the
+    // ball explicitly. Use the same bearing as the placement movement controls.
+    if (control && latest?.scratched) {
+      const direction = look.clone().applyQuaternion(app.quaternion.clone().invert())
+      orbitRotation.setFromAxisAngle(cameraUp, angle - Math.atan2(-direction.z, direction.x))
+      camera.position.sub(target).applyQuaternion(orbitRotation).add(target)
+      camera.quaternion.premultiply(orbitRotation)
+    }
     // Stay above the shaft and on the shooter's side of the ball. Clamp the
     // input itself so reversing at either limit moves the view immediately.
     const eyeElevation = Math.atan2(-look.y, Math.hypot(look.x, look.z))
@@ -448,14 +456,11 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       if (latest?.scratched) {
         const forward = Number(control.keyW.down) - Number(control.keyS.down)
         const right = Number(control.keyD.down) - Number(control.keyA.down)
-        const distance = dt * 0.5 / Math.max(1, Math.hypot(forward, right))
+        const distance = dt * 1.5 / Math.max(1, Math.hypot(forward, right))
         placeX = Math.max(-size.length / 2 + 2 * R, Math.min(size.length / 2 - 2 * R,
           placeX + (Math.cos(angle) * forward + Math.sin(angle) * right) * distance))
         placeY = Math.max(-size.width / 2 + 2 * R, Math.min(size.width / 2 - 2 * R,
           placeY + (Math.sin(angle) * forward - Math.cos(angle) * right) * distance))
-        // Preview on the real cue-ball mesh; click or Space asks the server to commit.
-        balls[0].active = true
-        balls[0].position.set(placeX, R, -placeY)
       } else {
         // Native scroll is negative when pulling back (the same direction as zooming out).
         speed = Math.max(0.1, Math.min(5, speed + vertical * dt - control.scrollDelta.value * 0.01))
@@ -472,8 +477,8 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         // Predict only the local rendered stance. The server validates aim and
         // moves the actual player; its delayed transform cannot pull this view back.
         if (!poseMeasurements) poseMeasurements = playerMeasurements(me)
-        const stance = avatarStance(ball, angle, size, aim?.floorY ?? floorY,
-          aim?.cueOffset ?? poseMeasurements.cueOffset)
+        const stance = latest.scratched ? placementStance(ball, size, aim?.floorY ?? floorY) :
+          avatarStance(ball, angle, size, aim?.floorY ?? floorY, aim?.cueOffset ?? poseMeasurements.cueOffset)
         aimStance = { position: worldPosition(stance.position),
           quaternion: app.quaternion.clone().multiply(stance.quaternion) }
       }
@@ -483,18 +488,42 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         app.send('pool:aim', { angle, side, top, speed,
           placement: latest?.scratched ? { x: placeX, y: placeY } : null })
       }
-      ghost.active = false
       text.value = latest?.error || (latest?.scratched
         ? 'Scratch · Mouse / ← →: orbit · WASD: move white ball\nClick / Space: confirm · R: re-rack · Esc: leave'
         : `Mouse ←/→: aim · ↑/↓: orbit view · Scroll back / closer: Power ${speed.toFixed(1)} m/s · W/S Top ${top.toFixed(2)} · A/D Side ${side.toFixed(2)}\nSpace: shoot · Esc: leave · X: return cue`)
     }
     // Move the actual cue from the existing rack, visible to every observer.
     const shooter = latest?.owner
-    if (nearby && shooter && shooter !== me.id && latest.scratched && !latest.moving &&
-        aim?.playerId === shooter && aim.placement) {
+    const placing = shooter && latest.scratched && !latest.moving &&
+      (shooter === me.id ? !!control : aim?.playerId === shooter && aim.placement)
+    const placementActor = placing ? shooter : null
+    const placementPlayer = placementActor && world.getPlayer(placementActor)
+    if (nearby && placementActor && cueHolders.includes(placementActor)) {
+      const selected = placementActor === me.id ? [placeX, placeY, 0] :
+        [aim.placement.x, aim.placement.y, 0]
+      // Position the real ball on the cloth, including on observing clients.
+      // The hand reaches this position; its animation never lifts the ball.
       balls[0].active = true
-      balls[0].position.set(aim.placement.x, R, -aim.placement.y)
+      balls[0].position.set(selected[0], R, -selected[1])
+      const ball = worldPosition(new Vector3(selected[0], R, -selected[1]))
+      if (placementPlayer) {
+        if (posedPlayer && posedPlayer !== placementActor) clearPose()
+        if (!poseMeasurements) poseMeasurements = playerMeasurements(placementPlayer)
+        const stance = placementActor === me.id && aimStance || placementPlayer
+        const placement = playerPlacementPose(stance, ball, poseMeasurements, R * app.scale.y)
+        // Native root prediction is local-only. Observers solve the same
+        // body and hands relative to the remote player's accepted transform.
+        if (placementActor !== me.id) delete placement.pose.root
+        const entering = posedPlayer !== placementActor
+        placementPlayer.setPose?.(placement.pose, { duration: entering ? 0.25 : 0 })
+        posedPlayer = placementActor
+        posedBody = false
+        aimCue = null
+        app.emit(poseEvent, { playerId: placementActor, tableId: app.instanceId,
+          position: placement.cuePosition.toArray(), quaternion: placement.cueQuaternion.toArray(), followGrip: true })
+      }
     }
+    ghost.active = false
     const aiming = shooter && !latest.moving && !latest.scratched &&
       (shooter === me.id ? !!control : aim?.playerId === shooter)
     const actor = stroke?.playerId || (aiming ? shooter : null)
@@ -542,11 +571,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       posedBody = true
       app.emit(poseEvent, { playerId: actor, tableId: app.instanceId,
         position: cuePosition.toArray(), quaternion: cueQuaternion.toArray(), followGrip: clock < cueEntryUntil })
-    } else if (control && latest?.scratched && aimStance) {
-      posedPlayer = me.id
-      me.setPose?.({ root: { position: aimStance.position.toArray(),
-        quaternion: aimStance.quaternion.toArray() } })
-    } else if (!shotPending) clearPose()
+    } else if (!placementActor && !shotPending) clearPose()
     if (cameraHold) {
       if (cameraHold.returnAt === null && !shotPending && !stroke && posedPlayer !== me.id) returnCamera()
       if (cameraHold.returnAt !== null && clock - cameraHold.returnAt > 1e-8) {
