@@ -1,6 +1,7 @@
 // Each rack publishes its own holders; replacing one rack must not erase others.
 export const CUE_EVENT = 'billard:cues'
 export const POSE_EVENT = 'billard:cue-pose'
+export const AIM_DATA_EVENT = 'billard:aim-data'
 export function watchCues(world, changed) {
   const racks = new Map()
   world.on(CUE_EVENT, data => {

@@ -1,10 +1,11 @@
 import { Vector3, Quaternion, Euler } from 'three'
 import { BALL_RADIUS as R } from './simulation.js'
 import { createSounds } from './sound.js'
-import { CUE_EVENT, POSE_EVENT, watchCues } from './cues.js'
+import { CUE_EVENT, POSE_EVENT, AIM_DATA_EVENT, watchCues } from './cues.js'
 import { shotPose, avatarStance, placementStance, AIM_ELEVATION } from './aim.js'
 import { playerAimPose, playerPlacementPose, playerMeasurements } from './player-pose.js'
 import { strokePose, STROKE_END } from './stroke.js'
+import { createAimHud } from './hud.js'
 
 export function startClient(world, app, { balls, ghost, surfaceTarget, size, playChannel, soundSources }) {
   if (!world.getPlayer) return
@@ -41,14 +42,16 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
   const hasCue = () => cueHolders.includes(me.id)
   const canPlay = () => hasCue() && !control && !cameraHold && !pending && !shotPending && !latest?.moving && !latest?.stroke && !latest?.owner
   const ui = app.create('ui', {
-    space: 'screen', width: 620, height: 92, position: [0.5, 1, 0],
-    offset: [0, -24, 0], pivot: 'bottom-center', backgroundColor: '#101b29',
+    space: 'screen', width: 480, height: 72, position: [0.5, 1, 0],
+    offset: [0, -24, 0], pivot: 'bottom-center', backgroundColor: 'rgba(11, 10, 21, 0.2)',
     padding: 14, pointerEvents: false,
   })
-  const text = app.create('uitext', { fontSize: 16, color: '#ffffff', value: '', textAlign: 'center' })
+  const text = app.create('uitext', { fontSize: 14, color: 'rgba(255, 255, 255, 0.65)', value: '', textAlign: 'center' })
   ui.add(text)
   ui.active = false
   app.add(ui)
+  const hud = createAimHud(world, app)
+  let controlHintMode = null
   let playHintControl = null
   let hintMode = null
   let hoverRefreshPending = false
@@ -78,6 +81,15 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     hintMode = null
   }
   const refresh = () => {
+    const controlMode = control ? latest?.scratched ? 'place' : 'aim' : null
+    if (controlMode !== controlHintMode) {
+      controlHintMode = controlMode
+      control?.setActions(controlMode === 'aim' ? [{
+        type: 'custom', btn: 'W/S · A/D',
+        label: 'Spin · Scroll: power · Space: shoot · Esc: leave',
+        position: 'bottom-left', opacity: .5,
+      }] : [])
+    }
     const waiting = !cameraHold && hoveredTargets.size > 0 && (shotPending || latest?.moving || latest?.stroke) && me.position.distanceTo(app.position) < 15
     const mode = waiting ? 'waiting' : canPlay() && hoveredTargets.size > 0 ? 'play' : null
     if (mode !== hintMode) {
@@ -105,6 +117,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       wake()
     }
   }
+  const clearAimData = () => app.emit(AIM_DATA_EVENT, { playerId: me.id, tableId: app.instanceId, clear: true })
   const clearPose = () => {
     if (posedPlayer) {
       app.emit(poseEvent, { playerId: posedPlayer, tableId: app.instanceId, clear: true })
@@ -143,6 +156,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     const active = control
     control = null
     pending = false
+    clearAimData()
     if (!keepPose) {
       aimEntry = null
       aimCameraPending = false
@@ -150,7 +164,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       strokePlayback = null
       clearPose()
     }
-    if (active) { active.camera.write = false; active.release() }
+    if (active) { active.setActions([]); active.camera.write = false; active.release() }
     if (!cameraHold) app.off('lateUpdate', updateCamera)
     if (savedCamera) {
       me.setCamera?.({ ...savedCamera, duration: 0.2 })
@@ -160,6 +174,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     idle?.release()
     idle = null
     ui.active = ghost.active = false
+    hud.hide()
     refresh()
   }
   const request = (operation, data = {}) => app.send(`pool:${operation}`, { ...data, seq: latest?.seq })
@@ -175,6 +190,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     if (latest.scratched) { placeX = -size.length / 4; placeY = 0 }
     control = idle
     idle = null
+    control.hideReticle()
     for (const key of ['keyW', 'keyA', 'keyS', 'keyD', 'arrowLeft', 'arrowRight', 'arrowUp', 'arrowDown', 'space', 'keyR', 'escape'])
       control[key].capture = true
     control.camera.write = true
@@ -373,6 +389,9 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       writeAimCamera(control.camera, aimCameraPosition, aimCameraTarget)
     else if (cameraHold?.control)
       writeAimCamera(cameraHold.control.camera, cameraHold.position, cameraHold.target)
+    if (control && !aimEntry && !latest?.scratched && !latest?.error && latest?.balls[0]?.p)
+      hud.update(control.camera, latest.balls[0].p, angle, side, top, speed, control.screen)
+    else hud.hide()
   }
   update = dt => {
     if (!Number.isFinite(dt) || dt <= 0) return
@@ -470,6 +489,11 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         if (spin > 0.45) { side *= 0.45 / spin; top *= 0.45 / spin }
       }
       const ball = latest?.scratched ? [placeX, placeY, 0] : latest?.balls[0]?.p
+      if (ball && latest) app.emit(AIM_DATA_EVENT, {
+        playerId: me.id, tableId: app.instanceId, cue: ball, angle, size, radius: R,
+        targets: latest.balls.slice(1).filter(b => b.state !== 'InPocket' && b.state !== 'Falling').map(b => b.p),
+        position: app.position.toArray(), quaternion: app.quaternion.toArray(), scale: app.scale.toArray(),
+      })
       if (ball) {
         const pose = shotPose(ball, angle, side, top, AIM_ELEVATION, speed)
         aimCameraPosition = worldPosition(pose.cameraPosition)
@@ -488,9 +512,10 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         app.send('pool:aim', { angle, side, top, speed,
           placement: latest?.scratched ? { x: placeX, y: placeY } : null })
       }
+      ui.active = !!latest?.error || !!latest?.scratched
       text.value = latest?.error || (latest?.scratched
         ? 'Scratch · Mouse / ← →: orbit · WASD: move white ball\nClick / Space: confirm · R: re-rack · Esc: leave'
-        : `Mouse ←/→: aim · ↑/↓: orbit view · Scroll back / closer: Power ${speed.toFixed(1)} m/s · W/S Top ${top.toFixed(2)} · A/D Side ${side.toFixed(2)}\nSpace: shoot · Esc: leave · X: return cue`)
+        : '')
     }
     // Move the actual cue from the existing rack, visible to every observer.
     const shooter = latest?.owner
@@ -592,5 +617,6 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     returnCamera()
     cameraHold = null
     clearPlayHint()
+    hud.destroy()
   })
 }

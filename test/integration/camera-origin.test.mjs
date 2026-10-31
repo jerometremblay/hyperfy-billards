@@ -15,7 +15,16 @@ after(() => rm(temp, { recursive: true, force: true }))
 const source = process.env.BILLARD_CLIENT_SCRIPT ? await readFile(process.env.BILLARD_CLIENT_SCRIPT, 'utf8') : undefined
 
 function session(zoom, yaw) {
-  const nativeWorld = { rig: new THREE.Object3D(), camera: new THREE.Object3D() }
+  const nativeWorld = { rig: new THREE.Object3D(), camera: new THREE.Object3D(), reticleSuppressors: 0,
+    ui: { suppressReticle() {
+      nativeWorld.reticleSuppressors++
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        nativeWorld.reticleSuppressors--
+      }
+    } } }
   nativeWorld.rig.position.set(4.3, 2.1, -5.6)
   nativeWorld.rig.quaternion.setFromEuler(new THREE.Euler(-.35, yaw, .08, 'YXZ'))
   nativeWorld.camera.position.z = zoom
@@ -34,6 +43,7 @@ function session(zoom, yaw) {
     const fixture = bind(), native = controls.bind({ priority: 1 })
     appBindings++
     fixture.camera = native.camera
+    fixture.hideReticle = value => native.hideReticle(value)
     const release = fixture.release
     fixture.release = () => { native.release(); release() }
     return fixture
@@ -70,6 +80,7 @@ test('native third-person view remains the exact entry origin across a delayed s
     assert.ok(s.view().distanceTo(before) < 1e-8, 'the first aiming frame starts where the user was looking')
     assert.ok(s.nativeWorld.rig.quaternion.angleTo(rotation) < 1e-6)
     assert.equal(s.appBindings, 1, 'ownership acceptance retains the captured camera binding')
+    assert.equal(s.nativeWorld.reticleSuppressors, 1, 'aiming hides the normal camera cursor')
     const ball = s.server.app.state.pool.balls[0].p
     const target = new THREE.Vector3(ball[0], physics.BALL_RADIUS + ball[2], -ball[1]).add(s.client.app.position)
     const end = cueAlignedEye(s.eye, target, s.server.app.state.aim.angle)
@@ -84,6 +95,22 @@ test('native third-person view remains the exact entry origin across a delayed s
     }
     assert.ok(s.actor.position.equals(s.authority.position), 'the actual stance remains server-owned')
     s.client.emit('destroy')
+    assert.equal(s.nativeWorld.reticleSuppressors, 0, 'destroy restores the normal camera cursor')
+  }
+})
+
+test('leaving aim by Escape or shooting releases native reticle suppression', () => {
+  for (const exit of ['escape', 'space']) {
+    const s = session(2.7, -.7)
+    s.surface.onPointerDown({ button: 'left' })
+    for (const [event, data] of s.requests.splice(0)) s.server.emit(event, data, 'alice')
+    for (const [event, data] of s.replies.splice(0)) s.client.emit(event, data)
+    s.client.emit('update', 1 / 60)
+    assert.equal(s.nativeWorld.reticleSuppressors, 1)
+    s.client.control[exit].onPress()
+    assert.equal(s.nativeWorld.reticleSuppressors, 0, 'leaving aiming restores the normal cursor')
+    s.client.emit('destroy')
+    assert.equal(s.nativeWorld.reticleSuppressors, 0)
   }
 })
 

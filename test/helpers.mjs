@@ -8,7 +8,7 @@ import * as THREE from 'three'
 export const root = fileURLToPath(new URL('../', import.meta.url))
 const temp = await mkdtemp(`${tmpdir()}/hyperfy-billard-test-`)
 await build({
-  stdin: { contents: "export * from './src/simulation.js'; export * from './src/aim.js'; export * from './src/stroke.js'; export * from './src/player-pose.js'", resolveDir: root },
+  stdin: { contents: "export * from './src/simulation.js'; export * from './src/aim.js'; export * from './src/stroke.js'; export * from './src/player-pose.js'; export * from './src/hud.js'", resolveDir: root },
   bundle: true,
   format: 'esm',
   platform: 'node',
@@ -18,7 +18,7 @@ export const physics = await import(`${temp}/simulation.mjs`)
 await build({
   stdin: {
     contents:
-      ['Prim', 'Group', 'Action', 'UI', 'UIText', 'Audio', 'Light', 'RigidBody', 'Collider']
+      ['Prim', 'Group', 'Action', 'UI', 'UIView', 'UIText', 'Audio', 'Light', 'RigidBody', 'Collider']
         .map(n => `export { ${n} } from './src/core/nodes/${n}.js'`)
         .join(';') + "; export { importApp, exportApp } from './src/core/extras/appTools.js'",
     resolveDir: process.env.HYPERFY_ROOT ? resolve(process.env.HYPERFY_ROOT) : `${root}vendor/hyperfy`,
@@ -29,13 +29,14 @@ await build({
   outfile: `${temp}/nodes.mjs`,
 })
 export const nodes = await import(`${temp}/nodes.mjs`)
-const constructors = { prim: nodes.Prim, group: nodes.Group, action: nodes.Action, ui: nodes.UI, uitext: nodes.UIText, audio: nodes.Audio, light: nodes.Light, rigidbody: nodes.RigidBody, collider: nodes.Collider }
+const constructors = { prim: nodes.Prim, group: nodes.Group, action: nodes.Action, ui: nodes.UI, uiview: nodes.UIView, uitext: nodes.UIText, audio: nodes.Audio, light: nodes.Light, rigidbody: nodes.RigidBody, collider: nodes.Collider }
 export const code = await readFile(`${root}dist/hyperfy-billard.js`, 'utf8')
 let nextInstanceId = 0
 export function harness({ instanceId = `test-app-${++nextInstanceId}`, server = false, state = {}, props = {}, players = [], source = code, bus = {}, cueHolders, modelNodes = {} } = {}) {
   const handlers = {},
     created = [],
     appChildren = [],
+    worldChildren = [],
     sent = [],
     audioPlays = []
   let now = 0, nextTimer = 0
@@ -103,8 +104,10 @@ export function harness({ instanceId = `test-app-${++nextInstanceId}`, server = 
       const boundControl = new Proxy(
         {
           camera: { position: new THREE.Vector3(), quaternion: new THREE.Quaternion() },
+          screen: { width: 1280, height: 900 },
           pointer,
           scrollDelta: { value: 0 },
+          hideReticle() {},
           setActions(value) { actionPrompts = value || [] },
           release() {
             if (!done) released++
@@ -125,8 +128,8 @@ export function harness({ instanceId = `test-app-${++nextInstanceId}`, server = 
   }
   const worldEvents = bus
   const world = {
-    add() {},
-    remove() {},
+    add(node) { worldChildren.push(node) },
+    remove(node) { const index = worldChildren.indexOf(node); if (index >= 0) worldChildren.splice(index, 1) },
     on(name, callback) {
       ;(worldEvents[name] ||= []).push(callback)
     },
@@ -157,6 +160,7 @@ export function harness({ instanceId = `test-app-${++nextInstanceId}`, server = 
     handlers,
     created,
     appChildren,
+    worldChildren,
     sent,
     audioPlays,
     advance,

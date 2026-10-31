@@ -1437,6 +1437,7 @@
   // src/cues.js
   var CUE_EVENT = "billard:cues";
   var POSE_EVENT = "billard:cue-pose";
+  var AIM_DATA_EVENT = "billard:aim-data";
   function watchCues(world2, changed) {
     const racks = /* @__PURE__ */ new Map();
     world2.on(CUE_EVENT, (data) => {
@@ -2248,6 +2249,165 @@
     };
   }
 
+  // src/hud.js
+  function strikeOffset(side, top, angle) {
+    const offset = new V(Math.sin(angle) * side, top, Math.cos(angle) * side);
+    const direction = new V(Math.cos(angle), -0.045, -Math.sin(angle)).normalize();
+    const along = offset.dot(direction);
+    return offset.addScaledVector(
+      direction,
+      -(along + Math.sqrt(Math.max(0, along * along + 1 - offset.lengthSq())))
+    ).multiplyScalar(BALL_RADIUS);
+  }
+  function createAimHud(world2, app2) {
+    const ui = app2.create("ui", {
+      space: "screen",
+      width: 1,
+      height: 1,
+      res: 2,
+      position: [0, 0, 0],
+      pivot: "top-left",
+      pointerEvents: false
+    });
+    ui.active = false;
+    world2.add(ui);
+    const halfFov = Math.tan(70 * Math.PI / 360);
+    const dot = (parent, diameter, color) => {
+      const view = app2.create("uiview", {
+        absolute: true,
+        width: diameter,
+        height: diameter,
+        borderRadius: diameter / 2,
+        backgroundColor: color
+      });
+      parent.add(view);
+      return view;
+    };
+    const guides = [0, 1].map(() => Array.from({ length: 50 }, () => dot(ui, 2, "rgba(255, 255, 255, 0.12)")));
+    const contact = dot(ui, 8, "rgba(255, 255, 255, 0.25)");
+    const gauge = app2.create("uiview", {
+      absolute: true,
+      width: 140,
+      height: 100
+    });
+    ui.add(gauge);
+    const powerX = (theta) => 12 + 83 * (Math.cos(theta) - Math.cos(24 * Math.PI / 180));
+    const power = Array.from({ length: 49 }, (_, index) => {
+      const theta = (24 - index) * Math.PI / 180;
+      const view = dot(gauge, 2.2, "rgba(255, 255, 255, 0.06)");
+      view.left = powerX(theta) - 1.1;
+      view.top = 50 + 83 * Math.sin(theta) - 1.1;
+      return view;
+    });
+    const level = dot(gauge, 6, "rgba(255, 255, 255, 0.22)");
+    const speedLabel = app2.create("uitext", {
+      absolute: true,
+      width: 86,
+      height: 30,
+      padding: [4, 8, 4, 8],
+      fontSize: 18,
+      color: "rgba(255, 255, 255, 0.32)",
+      value: "",
+      backgroundColor: "rgba(11, 10, 21, 0.04)",
+      borderRadius: 5,
+      textAlign: "center"
+    });
+    gauge.add(speedLabel);
+    let last = null;
+    return {
+      hide() {
+        ui.active = false;
+        last = null;
+      },
+      destroy() {
+        world2.remove(ui);
+      },
+      update(camera, ball, angle, side, top, speed, screen) {
+        const { width, height } = screen;
+        if (width <= 0 || height <= 0) {
+          this.hide();
+          return;
+        }
+        ui.active = true;
+        const values = [
+          width,
+          height,
+          angle,
+          side,
+          top,
+          speed,
+          ...ball,
+          ...camera.position.toArray(),
+          ...camera.quaternion.toArray(),
+          ...app2.position.toArray(),
+          ...app2.quaternion.toArray(),
+          ...app2.scale.toArray()
+        ];
+        if (last && values.every((value, index) => value === last[index])) return;
+        last = values;
+        if (ui.width !== width || ui.height !== height) {
+          ui.width = width;
+          ui.height = height;
+        }
+        const inverse = camera.quaternion.clone().invert();
+        const focal = height / (2 * halfFov);
+        const worldPosition = (local) => local.multiply(app2.scale).applyQuaternion(app2.quaternion).add(app2.position);
+        const centre = worldPosition(new V(ball[0], BALL_RADIUS + ball[2], -ball[1]));
+        const distance = camera.position.distanceTo(centre);
+        const worldRadius = BALL_RADIUS * Math.max(app2.scale.x, app2.scale.y, app2.scale.z);
+        if (distance <= worldRadius * 2 || centre.clone().sub(camera.position).applyQuaternion(inverse).z >= 0) {
+          this.hide();
+          return;
+        }
+        const project = (point) => {
+          point.sub(camera.position).applyQuaternion(inverse);
+          return [
+            width / 2 - point.x / point.z * focal,
+            height / 2 + point.y / point.z * focal
+          ];
+        };
+        const strike = (side2, top2) => project(strikeOffset(side2, top2, angle).multiply(app2.scale).applyQuaternion(app2.quaternion).add(centre));
+        const [cx, cy] = project(centre.clone());
+        const [right] = project(centre.clone().add(
+          new V(worldRadius, 0, 0).applyQuaternion(camera.quaternion)
+        ));
+        const radius = Math.abs(right - cx);
+        const diameter = Math.max(1.2, radius * 3.6 / 60);
+        for (let axis = 0; axis < 2; axis++) {
+          const fixed = axis === 0 ? side : top;
+          const moving = axis === 0 ? top : side;
+          const limit = Math.sqrt(Math.max(0, 0.45 * 0.45 - fixed * fixed));
+          const positions = Array.from({ length: 49 }, (_, i) => -limit + 2 * limit * i / 48);
+          positions.push(Math.max(-limit, Math.min(limit, moving)));
+          positions.sort((a, b) => a - b);
+          positions.forEach((value, i) => {
+            const [x2, y2] = axis === 0 ? strike(fixed, value) : strike(value, fixed);
+            guides[axis][i].width = guides[axis][i].height = diameter;
+            guides[axis][i].borderRadius = diameter / 2;
+            guides[axis][i].left = x2 - diameter / 2;
+            guides[axis][i].top = y2 - diameter / 2;
+          });
+        }
+        const [x, y] = strike(side, top);
+        contact.left = x - 4;
+        contact.top = y - 4;
+        gauge.left = cx + radius * 1.35;
+        gauge.top = cy - 50;
+        const ratio = Math.max(0, Math.min(1, (speed - 0.1) / 4.9));
+        power.forEach((view, i) => {
+          view.backgroundColor = i / 48 >= 1 - ratio ? "rgba(255, 255, 255, 0.22)" : "rgba(255, 255, 255, 0.06)";
+        });
+        const theta = (ratio * 48 - 24) * Math.PI / 180;
+        const levelX = powerX(theta), levelY = 50 + 83 * Math.sin(theta);
+        level.left = levelX - 3;
+        level.top = levelY - 3;
+        speedLabel.left = levelX + 14;
+        speedLabel.top = levelY - 15;
+        speedLabel.value = `${speed.toFixed(1)} m/s`;
+      }
+    };
+  }
+
   // src/client.js
   function startClient(world2, app2, { balls, ghost, surfaceTarget, size, playChannel, soundSources }) {
     if (!world2.getPlayer) return;
@@ -2285,19 +2445,21 @@
     const canPlay = () => hasCue() && !control && !cameraHold && !pending && !shotPending && !latest?.moving && !latest?.stroke && !latest?.owner;
     const ui = app2.create("ui", {
       space: "screen",
-      width: 620,
-      height: 92,
+      width: 480,
+      height: 72,
       position: [0.5, 1, 0],
       offset: [0, -24, 0],
       pivot: "bottom-center",
-      backgroundColor: "#101b29",
+      backgroundColor: "rgba(11, 10, 21, 0.2)",
       padding: 14,
       pointerEvents: false
     });
-    const text = app2.create("uitext", { fontSize: 16, color: "#ffffff", value: "", textAlign: "center" });
+    const text = app2.create("uitext", { fontSize: 14, color: "rgba(255, 255, 255, 0.65)", value: "", textAlign: "center" });
     ui.add(text);
     ui.active = false;
     app2.add(ui);
+    const hud = createAimHud(world2, app2);
+    let controlHintMode = null;
     let playHintControl = null;
     let hintMode = null;
     let hoverRefreshPending = false;
@@ -2327,6 +2489,17 @@
       hintMode = null;
     };
     const refresh2 = () => {
+      const controlMode = control ? latest?.scratched ? "place" : "aim" : null;
+      if (controlMode !== controlHintMode) {
+        controlHintMode = controlMode;
+        control?.setActions(controlMode === "aim" ? [{
+          type: "custom",
+          btn: "W/S \xB7 A/D",
+          label: "Spin \xB7 Scroll: power \xB7 Space: shoot \xB7 Esc: leave",
+          position: "bottom-left",
+          opacity: 0.5
+        }] : []);
+      }
       const waiting = !cameraHold && hoveredTargets.size > 0 && (shotPending || latest?.moving || latest?.stroke) && me.position.distanceTo(app2.position) < 15;
       const mode = waiting ? "waiting" : canPlay() && hoveredTargets.size > 0 ? "play" : null;
       if (mode !== hintMode) {
@@ -2351,6 +2524,7 @@
         wake();
       };
     }
+    const clearAimData = () => app2.emit(AIM_DATA_EVENT, { playerId: me.id, tableId: app2.instanceId, clear: true });
     const clearPose = () => {
       if (posedPlayer) {
         app2.emit(poseEvent, { playerId: posedPlayer, tableId: app2.instanceId, clear: true });
@@ -2389,6 +2563,7 @@
       const active = control;
       control = null;
       pending = false;
+      clearAimData();
       if (!keepPose) {
         aimEntry = null;
         aimCameraPending = false;
@@ -2397,6 +2572,7 @@
         clearPose();
       }
       if (active) {
+        active.setActions([]);
         active.camera.write = false;
         active.release();
       }
@@ -2409,6 +2585,7 @@
       idle?.release();
       idle = null;
       ui.active = ghost.active = false;
+      hud.hide();
       refresh2();
     };
     const request = (operation, data = {}) => app2.send(`pool:${operation}`, { ...data, seq: latest?.seq });
@@ -2427,6 +2604,7 @@
       }
       control = idle;
       idle = null;
+      control.hideReticle();
       for (const key of ["keyW", "keyA", "keyS", "keyD", "arrowLeft", "arrowRight", "arrowUp", "arrowDown", "space", "keyR", "escape"])
         control[key].capture = true;
       control.camera.write = true;
@@ -2645,6 +2823,9 @@
         writeAimCamera(control.camera, aimCameraPosition, aimCameraTarget);
       else if (cameraHold?.control)
         writeAimCamera(cameraHold.control.camera, cameraHold.position, cameraHold.target);
+      if (control && !aimEntry && !latest?.scratched && !latest?.error && latest?.balls[0]?.p)
+        hud.update(control.camera, latest.balls[0].p, angle, side, top, speed, control.screen);
+      else hud.hide();
     };
     update = (dt) => {
       if (!Number.isFinite(dt) || dt <= 0) return;
@@ -2765,6 +2946,18 @@
           }
         }
         const ball = latest?.scratched ? [placeX, placeY, 0] : latest?.balls[0]?.p;
+        if (ball && latest) app2.emit(AIM_DATA_EVENT, {
+          playerId: me.id,
+          tableId: app2.instanceId,
+          cue: ball,
+          angle,
+          size,
+          radius: BALL_RADIUS,
+          targets: latest.balls.slice(1).filter((b2) => b2.state !== "InPocket" && b2.state !== "Falling").map((b2) => b2.p),
+          position: app2.position.toArray(),
+          quaternion: app2.quaternion.toArray(),
+          scale: app2.scale.toArray()
+        });
         if (ball) {
           const pose = shotPose(ball, angle, side, top, AIM_ELEVATION, speed);
           aimCameraPosition = worldPosition(pose.cameraPosition);
@@ -2787,8 +2980,8 @@
             placement: latest?.scratched ? { x: placeX, y: placeY } : null
           });
         }
-        text.value = latest?.error || (latest?.scratched ? "Scratch \xB7 Mouse / \u2190 \u2192: orbit \xB7 WASD: move white ball\nClick / Space: confirm \xB7 R: re-rack \xB7 Esc: leave" : `Mouse \u2190/\u2192: aim \xB7 \u2191/\u2193: orbit view \xB7 Scroll back / closer: Power ${speed.toFixed(1)} m/s \xB7 W/S Top ${top.toFixed(2)} \xB7 A/D Side ${side.toFixed(2)}
-Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
+        ui.active = !!latest?.error || !!latest?.scratched;
+        text.value = latest?.error || (latest?.scratched ? "Scratch \xB7 Mouse / \u2190 \u2192: orbit \xB7 WASD: move white ball\nClick / Space: confirm \xB7 R: re-rack \xB7 Esc: leave" : "");
       }
       const shooter = latest?.owner;
       const placing = shooter && latest.scratched && !latest.moving && (shooter === me.id ? !!control : aim?.playerId === shooter && aim.placement);
@@ -2894,6 +3087,7 @@ Space: shoot \xB7 Esc: leave \xB7 X: return cue`);
       returnCamera();
       cameraHold = null;
       clearPlayHint();
+      hud.destroy();
     });
   }
 
