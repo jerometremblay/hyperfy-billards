@@ -25,8 +25,14 @@ const POSE_EVENT = 'billard:cue-pose'
 const aimPoses = new Map()
 const carryPoses = new Set()
 const carryTransitions = new Map()
-// Close only the fingers; the native idle/walk clips still move the wrist and arm.
-const carryBones = {}
+// Hold the carrying arm near the native idle stance so walking cannot swing the cue.
+// The body and free arm keep their native animation; aiming replaces this pose.
+const carryBones = {
+  rightShoulder: { rotation: [-0.103, 0.090, -0.031, 0.990] },
+  rightUpperArm: { rotation: [-0.243, 0.247, -0.490, 0.800] },
+  rightLowerArm: { rotation: [0.002, 0.193, 0.014, 0.981] },
+  rightHand: { rotation: [0.083, -0.050, 0.084, 0.992] },
+}
 for (const [finger, angles] of Object.entries({
   Index: [0.62, 1.163125, 0.905],
   Middle: [0.94, 0.845125, 1.115875],
@@ -198,7 +204,7 @@ function updateHeldCues() {
     const palmLength = wrist && middle ? wrist.distanceTo(middle) : 0.08
     const id = holders[i]
     if (!carryPoses.has(id)) {
-      if (player.setPose?.({ bones: carryBones })) carryPoses.add(id)
+      if (player.setPose?.({ bones: carryBones }, { duration: 0.25 })) carryPoses.add(id)
     }
     if (wrist && middle && indexMatrix && littleMatrix) {
       const forward = middle.clone().sub(wrist)
@@ -382,7 +388,7 @@ if (world.isClient && typeof world.getPlayer === 'function') {
             quaternion: new Quaternion().setFromRotationMatrix(handInverse).multiply(cue.quaternion),
           })
         }
-        // Blend directly into the carrying fingers as the native body rises.
+        // Blend directly into the carrying arm and fingers as the native body rises.
         // Owning this target also prevents the table's subsequent release from
         // replacing it with an open hand.
         if (player?.setPose?.({ bones: carryBones }, { duration: 1 })) {

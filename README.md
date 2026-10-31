@@ -99,10 +99,12 @@ ownership before granting controls and again on each shot/place/reset. Pickup
 and return identify players from the transport sender.
 
 While standing or walking, the cue sits inside the curled fingers, with the
-thumb closing from the opposite, wrist side of the shaft. This finger-only pose
-leaves the native arm and wrist animation intact and yields to the aiming pose.
-After a shot, the fingers blend directly from the shooting grip into the carrying
-grip during the same one-second body rise, without passing through an open hand.
+thumb closing from the opposite, wrist side of the shaft. The carrying arm stays
+near the native idle stance, substantially reducing hand and cue swing while the
+body and free arm keep walking normally. Pickup blends into this pose over a
+quarter second, and aiming replaces it. After a shot, the arm and fingers blend
+directly from the shooting grip into the carrying grip during the same one-second
+body rise, without passing through an open hand.
 
 Entering aim blends the standing body, arms and fingers into the shooting stance
 over one second, with the same easing as the rise after a shot. The camera takes one straight path

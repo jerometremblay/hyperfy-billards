@@ -8,7 +8,7 @@ import { build } from 'esbuild'
 import { hyperfyRoot } from '../../tools/hyperfy.mjs'
 import { harness, physics } from '../helpers.mjs'
 
-test('carrying cue stays inside closed fingers through native idle, walking and aiming handoffs', async () => {
+test('carrying arm damps walking sway while the cue stays inside closed fingers through aiming handoffs', async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'billard-carry-grip-'))
   try {
     await build({ stdin: { contents: `
@@ -87,11 +87,18 @@ test('carrying cue stays inside closed fingers through native idle, walking and 
     })
     assert.ok(thumbVertices.length > 0, 'real thumb skin is included')
     let gripLocal, directionLocal
-    for (const mode of [0, 1, 0]) {
-      avatar.setLocomotion(mode, new THREE.Vector3(0, 0, -1), null)
-      ordinary.setLocomotion(mode, new THREE.Vector3(0, 0, -1), null)
+    const walking = [], nativeWalking = []
+    for (const [mode, axis] of [[0, [0, 0, 0]], [1, [0, 0, -1]], [1, [0, 0, 1]], [1, [1, 0, 0]], [1, [-1, 0, 0]], [0, [0, 0, 0]]]) {
+      avatar.setLocomotion(mode, new THREE.Vector3(...axis), null)
+      ordinary.setLocomotion(mode, new THREE.Vector3(...axis), null)
       for (let sample = 0; sample < 8; sample++) {
-        tick(15)
+        for (let frame = 0; frame < 15; frame++) {
+          tick()
+          if (mode === 1) {
+            walking.push({ grip: bone('rightHand'), direction: new THREE.Vector3(0, 1, 0).applyQuaternion(cue.quaternion) })
+            nativeWalking.push({ grip: bone('rightHand', ordinary), direction: bone('rightIndexProximal', ordinary).sub(bone('rightLittleProximal', ordinary)).normalize() })
+          }
+        }
         const wrist = bone('rightHand')
         const direction = new THREE.Vector3(0, 1, 0).applyQuaternion(cue.quaternion)
         const grip = cue.position.clone().addScaledVector(direction, -.38)
@@ -126,7 +133,7 @@ test('carrying cue stays inside closed fingers through native idle, walking and 
         assert.ok(bone('rightIndexDistal').sub(grip).dot(acrossCue) > .01, 'fingers stay on the other side of the shaft')
         assert.ok(thumbClearance >= .0138, `thumb skin clears the cue shaft: ${thumbClearance}`)
         assert.ok(thumbClearance <= .0165, `thumb pad closes against the shaft: ${thumbClearance}`)
-        for (const name of ['rightUpperArm', 'rightLowerArm', 'rightHand', 'leftHand', 'leftFoot', 'rightFoot'])
+        for (const name of ['leftHand', 'leftFoot', 'rightFoot'])
           assert.ok(bone(name).distanceTo(bone(name, ordinary)) < 1e-6, `${name} keeps its native locomotion`)
         const inverse = avatar.getBoneTransform('rightHand').clone().invert()
         const localGrip = grip.applyMatrix4(inverse), localDirection = direction.transformDirection(inverse)
@@ -135,6 +142,17 @@ test('carrying cue stays inside closed fingers through native idle, walking and 
         assert.ok(localDirection.distanceTo(directionLocal) < 1e-5, 'cue follows wrist rotation during walking')
       }
     }
+    const excursion = samples => {
+      let hand = 0, angle = 0
+      for (const a of samples) for (const b of samples) {
+        hand = Math.max(hand, a.grip.distanceTo(b.grip))
+        angle = Math.max(angle, a.direction.angleTo(b.direction))
+      }
+      return { hand, angle }
+    }
+    const motion = excursion(walking), nativeMotion = excursion(nativeWalking)
+    assert.ok(motion.hand < nativeMotion.hand * .3, 'carrying hand swing is reduced by at least 70 percent')
+    assert.ok(motion.angle < nativeMotion.angle * .3, 'carrying cue swing is reduced by at least 70 percent')
     let aim, position, quaternion
     for (const mode of [0, 1]) {
       avatar.setLocomotion(mode, new THREE.Vector3(0, 0, -1), null)
@@ -185,7 +203,7 @@ test('carrying cue stays inside closed fingers through native idle, walking and 
       }
       assert.equal(raw.scriptedPoseOwner, rackEntity, 'rack retains the carrying grip throughout the rise')
       tick(10)
-      assert.ok(bone('rightHand').distanceTo(bone('rightHand', ordinary)) < 1e-6, 'avatar finishes rising to the live native locomotion pose')
+      assert.ok(new THREE.Quaternion().fromArray(avatar.getNormalizedPose().rightUpperArm.rotation).angleTo(new THREE.Quaternion().fromArray(carryingPose.rightUpperArm.rotation)) < 1e-6, 'avatar finishes rising to the stable carrying arm pose')
     }
     avatar.setLocomotion(0, new THREE.Vector3(), null)
     ordinary.setLocomotion(0, new THREE.Vector3(), null)
