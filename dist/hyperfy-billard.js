@@ -2530,7 +2530,7 @@
         control?.setActions(controlMode === "aim" ? [{
           type: "custom",
           btn: "W/S \xB7 A/D",
-          label: "Spin \xB7 Scroll: power \xB7 Space: shoot \xB7 R: undo \xB7 Shift+R: rack \xB7 Esc: leave",
+          label: "Shift: fine aim \xB7 Spin \xB7 Scroll: power \xB7 Space: shoot \xB7 R: undo \xB7 Shift+R: rack \xB7 Esc: leave",
           position: "bottom-left",
           opacity: 0.5
         }] : []);
@@ -2965,7 +2965,8 @@
         const horizontal = Number(control.arrowRight.down) - Number(control.arrowLeft.down);
         const vertical = Number(control.arrowUp.down) - Number(control.arrowDown.down);
         const pointer = control.pointer.delta;
-        const turn = horizontal * dt + pointer.x * 3e-3;
+        const aimScale = control.shiftLeft.down || control.shiftRight.down ? 0.1 : 1;
+        const turn = (horizontal * dt + pointer.x * 3e-3) * aimScale;
         angle = Math.atan2(Math.sin(angle - turn), Math.cos(angle - turn));
         cameraOrbit -= pointer.y * 3e-3;
         if (latest?.scratched) {

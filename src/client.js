@@ -86,7 +86,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       controlHintMode = controlMode
       control?.setActions(controlMode === 'aim' ? [{
         type: 'custom', btn: 'W/S · A/D',
-        label: 'Spin · Scroll: power · Space: shoot · R: undo · Shift+R: rack · Esc: leave',
+        label: 'Shift: fine aim · Spin · Scroll: power · Space: shoot · R: undo · Shift+R: rack · Esc: leave',
         position: 'bottom-left', opacity: .5,
       }] : [])
     }
@@ -481,7 +481,8 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       const horizontal = Number(control.arrowRight.down) - Number(control.arrowLeft.down)
       const vertical = Number(control.arrowUp.down) - Number(control.arrowDown.down)
       const pointer = control.pointer.delta
-      const turn = horizontal * dt + pointer.x * 0.003
+      const aimScale = control.shiftLeft.down || control.shiftRight.down ? 0.1 : 1
+      const turn = (horizontal * dt + pointer.x * 0.003) * aimScale
       angle = Math.atan2(Math.sin(angle - turn), Math.cos(angle - turn))
       cameraOrbit -= pointer.y * 0.003
       if (latest?.scratched) {
