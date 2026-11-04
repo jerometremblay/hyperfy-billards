@@ -102,3 +102,26 @@ test('native return starts during the rise and aims at the original ball positio
   assert.equal(returned.duration, 1)
   assert.equal(actor.pose, null)
 })
+
+
+test('a shot preserves the first-person mode chosen before aiming', () => {
+  for (const firstPerson of [true, false]) {
+    const actor = player('alice')
+    actor.getCamera = () => ({ firstPerson, zoom: firstPerson ? 0 : 2 })
+    const server = harness({ server: true, players: [actor], cueHolders: ['alice'] })
+    const client = harness({ players: [actor], state: structuredClone(server.app.state), source })
+    server.app.deliver = (event, data) => client.emit(event, data)
+    client.app.deliver = (event, data) => server.emit(event, data, 'alice')
+    surface(client).onPointerDown({ button: 'left' })
+    client.emit('update', 1)
+    client.control.space.onPress()
+    for (let i = 0; i < 180; i++) {
+      server.emit('update', 1 / 60)
+      client.emit('update', 1 / 60)
+    }
+    const returned = actor.cameraCalls.at(-1)
+    assert.equal(!!returned.firstPerson, firstPerson)
+    assert.equal(returned.zoom, firstPerson ? 0 : .3)
+    assert.equal(client.activeControl, null)
+  }
+})

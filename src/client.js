@@ -150,7 +150,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       held.control.release()
       held.control = null
     }
-    me.setCamera?.({ target: held.target, zoom: 0.3, duration: riseDuration, armsOnly: true })
+    me.setCamera?.({ target: held.target, firstPerson: held.firstPerson, zoom: held.firstPerson ? 0 : 0.3, duration: riseDuration, armsOnly: true })
     refresh()
   }
   const stop = (release = true, keepPose = false) => {
@@ -213,7 +213,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       if (latest.scratched) placeCueBall()
       else {
         const ball = latest.balls[0].p
-        cameraHold = { control: null, returnAt: null, holding: control.space.down, strokeId: latest.seq + 1,
+        cameraHold = { firstPerson: !!savedCamera?.firstPerson, control: null, returnAt: null, holding: control.space.down, strokeId: latest.seq + 1,
           position: aimCameraPosition?.clone() || control.camera.position.clone(),
           target: worldPosition(new Vector3(ball[0], R + ball[2], -ball[1])) }
         // An early shot finishes lowering during the backswing, before impact.
@@ -223,7 +223,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         strokePlayback = { local: true, elapsed: 0, shots: latest.shots,
           stroke: { id: cameraHold.strokeId, playerId: me.id, ball: ball.slice(),
             angle, speed, side, top, held: cameraHold.holding } }
-        savedCamera = null // Return to the shoulder view as the avatar stands.
+        savedCamera = null // The shot camera retains the pre-aim view mode during the rise.
         shotPending = true
         requestedAt = clock
         shotRequestSeq = latest.seq

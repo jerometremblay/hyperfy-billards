@@ -2592,7 +2592,7 @@
         held.control.release();
         held.control = null;
       }
-      me.setCamera?.({ target: held.target, zoom: 0.3, duration: riseDuration, armsOnly: true });
+      me.setCamera?.({ target: held.target, firstPerson: held.firstPerson, zoom: held.firstPerson ? 0 : 0.3, duration: riseDuration, armsOnly: true });
       refresh2();
     };
     const stop = (release = true, keepPose = false) => {
@@ -2663,6 +2663,7 @@
         else {
           const ball = latest.balls[0].p;
           cameraHold = {
+            firstPerson: !!savedCamera?.firstPerson,
             control: null,
             returnAt: null,
             holding: control.space.down,
