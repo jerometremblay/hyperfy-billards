@@ -86,7 +86,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       controlHintMode = controlMode
       control?.setActions(controlMode === 'aim' ? [{
         type: 'custom', btn: 'W/S · A/D',
-        label: 'Spin · Scroll: power · Space: shoot · Esc: leave',
+        label: 'Spin · Scroll: power · Space: shoot · R: undo · Shift+R: rack · Esc: leave',
         position: 'bottom-left', opacity: .5,
       }] : [])
     }
@@ -95,8 +95,9 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     if (mode !== hintMode) {
       if (mode) {
         playHintControl ||= app.control()
+        bindReset(playHintControl)
         playHintControl.setActions([mode === 'waiting'
-          ? { type: 'hourglass', position: 'pointer', opacity: 0.5 }
+          ? { type: 'hourglass', btn: 'R', label: 'Undo', position: 'pointer', opacity: 0.5 }
           : { type: 'mouseLeft', label: 'Play', position: 'pointer', opacity: 0.5 }])
         hintMode = mode
       } else clearPlayHint()
@@ -178,6 +179,14 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     refresh()
   }
   const request = (operation, data = {}) => app.send(`pool:${operation}`, { ...data, seq: latest?.seq })
+  const bindReset = input => {
+    input.keyR.capture = true
+    input.keyR.onPress = () => {
+      if (!hasCue() || !isNearby()) return
+      const operation = input.shiftLeft.down || input.shiftRight.down ? 'reset' : 'undo'
+      app.send(`pool:${operation}`, { rack: latest?.rack })
+    }
+  }
   const placeCueBall = () => {
     if (!control || !latest || latest.moving || !latest.scratched || !hasCue()) return false
     request('place', { x: placeX, y: placeY })
@@ -223,6 +232,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
         stop(false, true)
         // Release aiming inputs now; retain the camera and Space release through follow-through.
         cameraHold.control = app.control()
+        bindReset(cameraHold.control)
         cameraHold.control.camera.write = true
         cameraHold.control.camera.zoom = 0
         cameraHold.control.scrollDelta.capture = true
@@ -236,7 +246,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
       }
     }
     control.mouseLeft.onPress = placeCueBall
-    control.keyR.onPress = () => { if (!latest?.moving) request('reset') }
+    bindReset(control)
     control.escape.onPress = () => stop()
     ui.active = true
     sinceAim = 1
@@ -252,6 +262,8 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
     if (shotPending && snapshot.seq > shotRequestSeq) shotPending = false
     if (latest && snapshot.scratched !== latest.scratched && !snapshot.moving) frames = []
     if (latest && snapshot.rack !== latest.rack) {
+      if (cameraHold || strokePlayback) stop(false)
+      shotPending = false
       frames = []
       soundEvents = []
       sounds.clear()

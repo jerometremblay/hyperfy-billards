@@ -213,8 +213,32 @@ export function startServer(world, app, preset, rollingResistance) {
     // Aim packets must not invalidate the sequence used by a following shot.
     app.send('pool:aim', aim)
   })
+  // Moving snapshots advance seq; rack identifies the layout being cancelled.
+  for (const operation of ['undo', 'reset']) {
+    app.on(`pool:${operation}`, (request, sender) => {
+      refreshCues()
+      expire()
+      const player = playerFor(sender)
+      if (!request || request.rack !== rack || !nearby(player) ||
+          !cueHolders.includes(player.id) || (owner && owner !== player.id)) return
+      if (operation === 'reset') sim.reset()
+      else if (!(stroke && !stroke.hit) && !sim.undo()) return
+      stroke = null
+      accumulator = sinceSnapshot = 0
+      if (updateAttached) {
+        app.off('update', update)
+        updateAttached = false
+      }
+      rack++
+      if (aim) {
+        aim.placement = null
+        moveStance(player, aim.angle)
+      }
+      publish()
+    })
+  }
   // Sequence checks reject duplicated shots and requests from an older rack.
-  for (const operation of ['shoot', 'reset', 'place']) {
+  for (const operation of ['shoot', 'place']) {
     app.on(`pool:${operation}`, (request, sender) => {
       refreshCues()
       expire()
@@ -238,11 +262,6 @@ export function startServer(world, app, preset, rollingResistance) {
         }
       }
       if (operation === 'place') accepted = sim.place(request.x, request.y)
-      if (operation === 'reset' && !sim.moving) {
-        sim.reset()
-        rack++
-        accepted = true
-      }
       if (accepted) {
         if (aim) {
           aim.placement = null

@@ -61,6 +61,7 @@ export class Simulation {
     )
     this.events = []
     this.shots = 0
+    this.lastShot = null
     this.error = null
   }
   get moving() {
@@ -85,6 +86,7 @@ export class Simulation {
   }
   shoot({ angle, speed, side = 0, top = 0 } = {}) {
     if (!this.canShoot({ angle, speed, side, top })) return false
+    this.lastShot = this.snapshot()
     const strike = cueStrike(angle, speed, new Vector3(side, top, 0), 0)
     this.table.cueball.vel.copy(strike.vel)
     this.table.cueball.rvel.copy(strike.rvel)
@@ -93,6 +95,22 @@ export class Simulation {
     this.events.push({ id: ++this.eventId, type: 'Hit', time: this.table.time / 1000,
       position: this.table.cueball.pos.toArray(), strength: speed })
     this.shots++
+    return true
+  }
+  undo() {
+    if (!this.lastShot) return false
+    const previous = this.lastShot
+    this.table = new Table(previous.balls.map(({ id, p, state }) => {
+      const ball = new Ball(new Vector3(...p), undefined, id)
+      Object.defineProperty(ball, 'id', { value: id })
+      ball.state = state
+      return ball
+    }))
+    this.table.time = previous.time * 1000
+    this.shots = previous.shots
+    this.error = null
+    this.events = []
+    this.lastShot = null
     return true
   }
   place(x, y) {

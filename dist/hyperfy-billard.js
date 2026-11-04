@@ -1297,6 +1297,7 @@
       );
       this.events = [];
       this.shots = 0;
+      this.lastShot = null;
       this.error = null;
     }
     get moving() {
@@ -1312,6 +1313,7 @@
     }
     shoot({ angle, speed, side = 0, top = 0 } = {}) {
       if (!this.canShoot({ angle, speed, side, top })) return false;
+      this.lastShot = this.snapshot();
       const strike = cueStrike(angle, speed, new V(side, top, 0), 0);
       this.table.cueball.vel.copy(strike.vel);
       this.table.cueball.rvel.copy(strike.rvel);
@@ -1325,6 +1327,22 @@
         strength: speed
       });
       this.shots++;
+      return true;
+    }
+    undo() {
+      if (!this.lastShot) return false;
+      const previous = this.lastShot;
+      this.table = new Table(previous.balls.map(({ id, p, state }) => {
+        const ball = new Ball(new V(...p), void 0, id);
+        Object.defineProperty(ball, "id", { value: id });
+        ball.state = state;
+        return ball;
+      }));
+      this.table.time = previous.time * 1e3;
+      this.shots = previous.shots;
+      this.error = null;
+      this.events = [];
+      this.lastShot = null;
       return true;
     }
     place(x, y) {
@@ -1666,7 +1684,29 @@
       app2.state.aim = aim;
       app2.send("pool:aim", aim);
     });
-    for (const operation of ["shoot", "reset", "place"]) {
+    for (const operation of ["undo", "reset"]) {
+      app2.on(`pool:${operation}`, (request, sender) => {
+        refreshCues();
+        expire();
+        const player = playerFor(sender);
+        if (!request || request.rack !== rack || !nearby(player) || !cueHolders.includes(player.id) || owner && owner !== player.id) return;
+        if (operation === "reset") sim.reset();
+        else if (!(stroke && !stroke.hit) && !sim.undo()) return;
+        stroke = null;
+        accumulator = sinceSnapshot = 0;
+        if (updateAttached) {
+          app2.off("update", update);
+          updateAttached = false;
+        }
+        rack++;
+        if (aim) {
+          aim.placement = null;
+          moveStance(player, aim.angle);
+        }
+        publish();
+      });
+    }
+    for (const operation of ["shoot", "place"]) {
       app2.on(`pool:${operation}`, (request, sender) => {
         refreshCues();
         expire();
@@ -1699,11 +1739,6 @@
           }
         }
         if (operation === "place") accepted = sim.place(request.x, request.y);
-        if (operation === "reset" && !sim.moving) {
-          sim.reset();
-          rack++;
-          accepted = true;
-        }
         if (accepted) {
           if (aim) {
             aim.placement = null;
@@ -2495,7 +2530,7 @@
         control?.setActions(controlMode === "aim" ? [{
           type: "custom",
           btn: "W/S \xB7 A/D",
-          label: "Spin \xB7 Scroll: power \xB7 Space: shoot \xB7 Esc: leave",
+          label: "Spin \xB7 Scroll: power \xB7 Space: shoot \xB7 R: undo \xB7 Shift+R: rack \xB7 Esc: leave",
           position: "bottom-left",
           opacity: 0.5
         }] : []);
@@ -2505,7 +2540,8 @@
       if (mode !== hintMode) {
         if (mode) {
           playHintControl ||= app2.control();
-          playHintControl.setActions([mode === "waiting" ? { type: "hourglass", position: "pointer", opacity: 0.5 } : { type: "mouseLeft", label: "Play", position: "pointer", opacity: 0.5 }]);
+          bindReset(playHintControl);
+          playHintControl.setActions([mode === "waiting" ? { type: "hourglass", btn: "R", label: "Undo", position: "pointer", opacity: 0.5 } : { type: "mouseLeft", label: "Play", position: "pointer", opacity: 0.5 }]);
           hintMode = mode;
         } else clearPlayHint();
       }
@@ -2589,6 +2625,14 @@
       refresh2();
     };
     const request = (operation, data = {}) => app2.send(`pool:${operation}`, { ...data, seq: latest?.seq });
+    const bindReset = (input) => {
+      input.keyR.capture = true;
+      input.keyR.onPress = () => {
+        if (!hasCue() || !isNearby()) return;
+        const operation = input.shiftLeft.down || input.shiftRight.down ? "reset" : "undo";
+        app2.send(`pool:${operation}`, { rack: latest?.rack });
+      };
+    };
     const placeCueBall = () => {
       if (!control || !latest || latest.moving || !latest.scratched || !hasCue()) return false;
       request("place", { x: placeX, y: placeY });
@@ -2655,6 +2699,7 @@
           const seq = latest.seq;
           stop(false, true);
           cameraHold.control = app2.control();
+          bindReset(cameraHold.control);
           cameraHold.control.camera.write = true;
           cameraHold.control.camera.zoom = 0;
           cameraHold.control.scrollDelta.capture = true;
@@ -2668,9 +2713,7 @@
         }
       };
       control.mouseLeft.onPress = placeCueBall;
-      control.keyR.onPress = () => {
-        if (!latest?.moving) request("reset");
-      };
+      bindReset(control);
       control.escape.onPress = () => stop();
       ui.active = true;
       sinceAim = 1;
@@ -2686,6 +2729,8 @@
       if (shotPending && snapshot.seq > shotRequestSeq) shotPending = false;
       if (latest && snapshot.scratched !== latest.scratched && !snapshot.moving) frames = [];
       if (latest && snapshot.rack !== latest.rack) {
+        if (cameraHold || strokePlayback) stop(false);
+        shotPending = false;
         frames = [];
         soundEvents = [];
         sounds.clear();
