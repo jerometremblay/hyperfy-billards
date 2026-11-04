@@ -495,7 +495,7 @@ export function startClient(world, app, { balls, ghost, surfaceTarget, size, pla
           placeY + (Math.sin(angle) * forward - Math.cos(angle) * right) * distance))
       } else {
         // Native scroll is negative when pulling back (the same direction as zooming out).
-        speed = Math.max(0.1, Math.min(5, speed + vertical * dt - control.scrollDelta.value * 0.01))
+        speed = Math.max(0.1, Math.min(5, speed + vertical * dt - Math.sign(control.scrollDelta.value) * 0.1))
         side += (Number(control.keyD.down) - Number(control.keyA.down)) * dt * 0.3
         top += (Number(control.keyW.down) - Number(control.keyS.down)) * dt * 0.3
         const spin = Math.hypot(side, top)
